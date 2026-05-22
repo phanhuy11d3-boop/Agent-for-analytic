@@ -87,12 +87,15 @@ def upload_dataframe(df: pd.DataFrame, filename: str) -> dict:
     df = sanitize_columns(df.copy())
     base_name = sanitize_table_name(filename)
 
-    conn = psycopg2.connect(
-        host=DB_HOST, port=DB_PORT, user=DB_USER,
-        password=DB_PASSWORD, dbname=DB_NAME,
-        connect_timeout=SQL_TIMEOUT,
-    )
-    conn.autocommit = False
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST, port=DB_PORT, user=DB_USER,
+            password=DB_PASSWORD, dbname=DB_NAME,
+            connect_timeout=SQL_TIMEOUT,
+        )
+        conn.autocommit = False
+    except Exception as e:
+        return {"success": False, "error": str(e), "table_name": base_name}
 
     try:
         cursor = conn.cursor()

@@ -18,9 +18,6 @@ DB_NAME     = _parsed.path.lstrip("/")
 # Keep the original encoded URL as well (needed by some ORMs)
 DATABASE_URL = _raw_url
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
