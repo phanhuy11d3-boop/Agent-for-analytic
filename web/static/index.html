@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Fraud Analyst</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <span style="font-size:1.3rem">🔍</span>
+  <h1>AI Fraud Analyst</h1>
+  <span class="badge">Multi-Agent</span>
+  <div class="dot"></div>
+</header>
+
+<main>
+  <!-- ─── LEFT PANEL ─────────────────────────── -->
+  <aside class="left-panel">
+
+    <!-- Dataset selector -->
+    <div class="dataset-section">
+      <div class="dataset-header">
+        <label class="section-label">Dataset</label>
+        <button id="btn-refresh-tables" class="btn-icon" title="Refresh list">⟳</button>
+      </div>
+      <select id="dataset-select" class="dataset-select">
+        <option value="">All tables</option>
+      </select>
+    </div>
+
+    <!-- Upload -->
+    <div class="upload-section">
+      <label class="section-label">Upload CSV / Excel</label>
+      <div class="upload-drop" id="upload-drop">
+        <input type="file" id="file-input" accept=".csv,.xlsx,.xls" hidden>
+        <span class="upload-icon">📂</span>
+        <span id="upload-label">Drop file or click to browse</span>
+        <span class="upload-hint">First sheet imported for Excel · Max 50 MB</span>
+      </div>
+      <div id="upload-status" class="upload-status" style="display:none"></div>
+    </div>
+
+    <!-- Input -->
+    <div class="input-section">
+      <label for="question-input">Ask a question</label>
+      <textarea
+        id="question-input"
+        placeholder="e.g. What is the fraud rate by payment method?"
+        rows="3"
+      ></textarea>
+      <button id="btn-analyze" class="btn-analyze">✨ Analyze</button>
+    </div>
+
+    <!-- Agent pipeline status -->
+    <div class="agents-section">
+      <h3>Agent Pipeline</h3>
+
+      <div class="agent-row" id="agent-data_agent">
+        <span class="agent-icon">🗄️</span>
+        <div style="flex:1">
+          <div class="agent-name">Data Agent</div>
+          <div class="agent-msg"></div>
+        </div>
+        <div class="agent-status-dot"></div>
+      </div>
+
+      <div class="agent-row" id="agent-analytics_agent">
+        <span class="agent-icon">📊</span>
+        <div style="flex:1">
+          <div class="agent-name">Analytics Agent</div>
+          <div class="agent-msg"></div>
+        </div>
+        <div class="agent-status-dot"></div>
+      </div>
+
+      <div class="agent-row" id="agent-critic_agent">
+        <span class="agent-icon">🔍</span>
+        <div style="flex:1">
+          <div class="agent-name">Critic Agent</div>
+          <div class="agent-msg"></div>
+        </div>
+        <div class="agent-status-dot"></div>
+      </div>
+
+      <div class="agent-row" id="agent-writer_agent">
+        <span class="agent-icon">✍️</span>
+        <div style="flex:1">
+          <div class="agent-name">Writer Agent</div>
+          <div class="agent-msg"></div>
+        </div>
+        <div class="agent-status-dot"></div>
+      </div>
+    </div>
+
+    <!-- Suggested questions -->
+    <div class="suggestions-section">
+      <h3>Suggested Questions</h3>
+      <button class="suggestion-chip">What is the fraud rate by payment method?</button>
+      <button class="suggestion-chip">Which location has the highest fraud rate?</button>
+      <button class="suggestion-chip">Compare fraud rate between Mobile, Tablet, and Desktop</button>
+      <button class="suggestion-chip">Which merchant categories have fraud rate above 40%?</button>
+      <button class="suggestion-chip">What is the overall fraud rate in the dataset?</button>
+      <button class="suggestion-chip">Show top 10 customers with most fraud transactions</button>
+      <button class="suggestion-chip">How does account age correlate with fraud risk?</button>
+    </div>
+
+  </aside>
+
+  <!-- ─── RIGHT PANEL ────────────────────────── -->
+  <section class="right-panel">
+
+    <div class="right-panel-header">
+      <span>Report</span>
+      <a id="report-link" class="report-link" target="_blank" href="#">↗ Open in new tab</a>
+    </div>
+
+    <!-- Placeholder before first report -->
+    <div id="placeholder">
+      <div class="big-icon">📈</div>
+      <p>Ask a question to generate a report</p>
+    </div>
+
+    <!-- Report iframe — hidden until report is ready -->
+    <iframe id="report-frame" style="display:none"></iframe>
+
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
