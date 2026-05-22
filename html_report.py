@@ -562,34 +562,41 @@ body {
   line-height: 1.5;
 }
 
-/* ── Causal Attribution ── */
-.causal-section { margin-top: .75rem; }
-.causal-title {
+/* ── Hypotheses to Investigate ── */
+.hypo-section { margin-top: .75rem; }
+.hypo-title {
   font-size: .7rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .06em;
   color: var(--purple);
-  margin-bottom: .45rem;
+  margin-bottom: .3rem;
 }
-.causal-grid {
+.hypo-disclaimer {
+  font-size: .7rem;
+  color: var(--muted);
+  font-style: italic;
+  margin-bottom: .45rem;
+  line-height: 1.4;
+}
+.hypo-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: .45rem;
 }
-.causal-card {
+.hypo-card {
   background: rgba(137,103,224,.07);
   border: 1px solid rgba(137,103,224,.2);
   border-radius: 6px;
   padding: .55rem .75rem;
   font-size: .78rem;
 }
-.causal-card.confounder {
-  background: rgba(242,200,17,.05);
-  border-color: rgba(242,200,17,.18);
+.hypo-card.weak {
+  background: rgba(161,159,157,.05);
+  border-color: rgba(161,159,157,.2);
 }
-.causal-factor { font-weight: 600; color: var(--text); margin-bottom: .18rem; }
-.causal-tag {
+.hypo-factor { font-weight: 600; color: var(--text); margin-bottom: .18rem; }
+.hypo-tag {
   display: inline-block;
   font-size: .62rem;
   font-weight: 700;
@@ -601,12 +608,12 @@ body {
   background: rgba(137,103,224,.25);
   color: var(--purple);
 }
-.causal-card.confounder .causal-tag {
-  background: rgba(242,200,17,.2);
-  color: var(--yellow);
+.hypo-card.weak .hypo-tag {
+  background: rgba(161,159,157,.15);
+  color: var(--muted);
 }
-.causal-effect { color: var(--accent); font-weight: 600; font-size: .8rem; }
-.causal-note { color: var(--muted); font-size: .72rem; margin-top: .18rem; line-height: 1.4; }
+.hypo-effect { color: var(--accent); font-weight: 600; font-size: .8rem; }
+.hypo-note { color: var(--muted); font-size: .72rem; margin-top: .18rem; line-height: 1.4; }
 
 /* ── Data Table ── */
 .table-count { font-size: .72rem; color: var(--muted); }
@@ -1136,7 +1143,8 @@ function updateInsights(analytics) {
   if (!content) return;
   if (spinner) spinner.style.display = 'none';
 
-  const { summary='', kpis=[], insights=[], anomalies=[], recommendation='', causal_attribution=[] } = analytics;
+  const { summary='', kpis=[], insights=[], anomalies=[], recommendation='', hypotheses=[], causal_attribution=[] } = analytics;
+  const hypoList = hypotheses.length ? hypotheses : causal_attribution; // backward compat
   let html = '';
 
   if (summary)
@@ -1162,20 +1170,25 @@ function updateInsights(analytics) {
       <ul class="anomaly-list">${anomalies.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>
     </div>`;
 
-  if (causal_attribution.length) {
-    const cards = causal_attribution.map(c => {
-      const cls = c.type === 'confounder' ? 'causal-card confounder' : 'causal-card';
-      const tag = c.type === 'confounder' ? 'Confounder' : 'Causal Driver';
+  if (hypoList.length) {
+    const cards = hypoList.map(h => {
+      const isWeak = (h.signal === 'weak') || (h.type === 'confounder');
+      const cls = isWeak ? 'hypo-card weak' : 'hypo-card';
+      const tag = isWeak ? 'Weak Signal' : 'Key Signal';
+      const factor = h.factor || '';
+      const effect  = h.effect  || '';
+      const note    = h.note    || '';
       return `<div class="${cls}">
-        <div class="causal-factor">${esc(c.factor||'')}</div>
-        <span class="causal-tag">${esc(tag)}</span>
-        <div class="causal-effect">${esc(c.effect||'')}</div>
-        <div class="causal-note">${esc(c.note||'')}</div>
+        <div class="hypo-factor">${esc(factor)}</div>
+        <span class="hypo-tag">${esc(tag)}</span>
+        <div class="hypo-effect">${esc(effect)}</div>
+        <div class="hypo-note">${esc(note)}</div>
       </div>`;
     }).join('');
-    html += `<div class="causal-section">
-      <div class="causal-title">Causal Attribution</div>
-      <div class="causal-grid">${cards}</div>
+    html += `<div class="hypo-section">
+      <div class="hypo-title">Hypotheses to Investigate</div>
+      <div class="hypo-disclaimer">Correlational signals from this dataset — not proven causes. Validate with controlled experiments before acting.</div>
+      <div class="hypo-grid">${cards}</div>
     </div>`;
   }
 
