@@ -8,24 +8,26 @@ A multi-agent AI system that converts natural language questions into SQL querie
 
 ```
 User Question
-     │
-     ▼
-┌─────────────┐   SQL + raw data   ┌──────────────────┐   KPIs + insights   ┌──────────────┐
-│  Data Agent │ ─────────────────▶ │ Analytics Agent  │ ──────────────────▶ │ Critic Agent │
-│             │        ▲           │                  │                     │              │
-│ NL → SQL    │        │           │ Stats + chi-sq   │                     │ QA review    │
-│ Execute DB  │        │           │ ANOVA + corr     │                     │ Feedback loop│
-└─────────────┘        │           └──────────────────┘                     └──────┬───────┘
-                       │                                                           │ approve
-                       └─────────────── needs_more_data (max 2 rounds) ───────────┤
-                                                                                   ▼
-                                                                          ┌──────────────┐
-                                                                          │ Writer Agent │
-                                                                          │ HTML Report  │
-                                                                          └──────────────┘
+      │
+      ▼
+┌──────────────┐    (clarification_required = True)
+│Semantic Agent│──────────────────────────────────────────┐
+└──────┬───────┘                                          │
+       │ (clarification_required = False)                 │
+       ▼                                                  ▼
+┌──────────────┐   SQL + raw data   ┌──────────────┐  ┌──────────────┐
+│  Data Agent  │ ──────────────────▶│AnalyticsAgent│  │ Writer Agent │
+└──────┬───────┘        ▲           └──────┬───────┘  └──────▲───────┘
+       │                │                  │                 │
+       │                │                  ▼                 │
+   (no data)            │           ┌──────────────┐         │
+       │                └───────────│ Critic Agent │─────────┘
+       │             needs_more_data└──────────────┘  approve
+       ▼
+      END
 ```
 
-State flows through a LangGraph `StateGraph`. The Critic Agent can send feedback to loop Data Agent up to 2 times. A conditional edge short-circuits to END on SQL error or empty result.
+State flows through a LangGraph `StateGraph`. The pipeline starts at `Semantic Agent`. If clarification/metadata is needed, it short-circuits directly to `Writer Agent` to show the Schema Interview / Gaps. Otherwise, it routes to `Data Agent`. The Critic Agent can send feedback to loop `Data Agent` up to 2 times. A conditional edge short-circuits to `END` on SQL error or empty result.
 
 ---
 
@@ -46,6 +48,7 @@ State flows through a LangGraph `StateGraph`. The Critic Agent can send feedback
 ```
 Agent-Analytic/
 ├── agents/
+│   ├── semantic_agent.py    # profile table, classify intent, check semantic gaps, request clarification
 │   ├── data_agent.py        # NL → SQL → execute → raw_data (1 auto-retry)
 │   ├── analytics_agent.py   # raw_data → stats + chi-square + ANOVA → KPIs + insights
 │   ├── critic_agent.py      # QA review → approve or request more data (max 2 rounds)
@@ -53,7 +56,21 @@ Agent-Analytic/
 ├── tools/
 │   ├── sql_executor.py      # execute_sql() — read-only, blocks DDL
 │   ├── schema_provider.py   # get_schema() — dynamic, cached, invalidatable
-│   └── dataset_uploader.py  # upload_dataframe() — creates ds_ tables
+│   ├── dataset_uploader.py  # upload_dataframe() — creates ds_ tables
+│   ├── context_store.py     # load/save semantic contexts in semantic_contexts.json
+│   ├── data_context.py      # build compact data context and prune for LLM token budget
+│   ├── evidence_planner.py  # plan evidence requirements based on query and intent
+│   ├── intent_classifier.py # classify user question intent (descriptive, correlation, etc.)
+│   ├── mschema_builder.py   # build metadata schema combining profile and semantic context
+│   ├── query_builder.py     # help generate or structure SQL queries
+│   ├── report_planner.py    # plan reports and convert report specs to analysis metadata
+│   ├── report_quality.py    # analyze quality issues in generated report or data context
+│   ├── schema_interview.py  # detect semantic gaps and request context/interviews
+│   ├── schema_linker.py     # link semantic concepts to physical columns
+│   ├── semantic_inference.py# infer semantics, roles, or relationships from column metadata
+│   ├── semantic_layer.py    # construct a semantic layer definition for the table
+│   ├── table_profiler.py    # profile database tables or raw rows to detect types and top values
+│   └── viz_planner.py       # plan visualizations based on report spec and data
 ├── web/
 │   ├── app.py               # FastAPI: GET /, WS /ws/analyze, GET /reports/{file}
 │   ├── routers/
@@ -154,7 +171,9 @@ POST /api/reanalyze           # Re-run analytics on provided rows
 
 | Agent | Input | Output |
 |-------|-------|--------|
+| Semantic Agent | question + table profile + optional sample rows | table profile, data context, intent, semantic gaps (requests clarification if context is missing) |
 | Data Agent | question + DB schema | SQL query + raw data rows (1 auto-retry on SQL error) |
 | Analytics Agent | raw data + question | Chi-square, ANOVA, correlations, KPIs, insights (JSON) |
 | Critic Agent | analytics output + question | approve or needs_more_data with feedback (max 2 loops) |
 | Writer Agent | analytics + raw data | HTML report saved to `reports/` |
+
