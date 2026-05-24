@@ -7,6 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from config import DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER, SQL_TIMEOUT
 from tools.dataset_uploader import upload_dataframe
+from tools.table_profiler import invalidate_profile_cache
 from tools.schema_provider import invalidate_schema_cache
 
 router = APIRouter(prefix="/api")
@@ -52,6 +53,7 @@ async def upload_dataset(file: UploadFile = File(...)):
         raise HTTPException(500, f"Database error: {result['error']}")
 
     invalidate_schema_cache()
+    invalidate_profile_cache()
 
     return {
         "table_name": result["table_name"],
@@ -70,18 +72,29 @@ async def list_tables():
             connect_timeout=SQL_TIMEOUT,
         )
         cursor = conn.cursor()
+        
+        # Optimize: Get all tables and estimated row counts in one fast query using pg_class
         cursor.execute("""
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-            ORDER BY table_name
+            SELECT c.relname AS table_name, c.reltuples::bigint AS row_count
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' 
+              AND c.relkind = 'r'
+            ORDER BY c.relname
         """)
-        table_names = [row[0] for row in cursor.fetchall()]
+        rows = cursor.fetchall()
 
         tables = []
-        for tname in table_names:
-            cursor.execute(f'SELECT COUNT(*) FROM "{tname}"')
-            count = cursor.fetchone()[0]
+        for row in rows:
+            tname = row[0]
+            count = row[1]
+            # Fallback to exact COUNT(*) if PostgreSQL stats are uninitialized or empty
+            if count <= 0:
+                try:
+                    cursor.execute(f'SELECT COUNT(*) FROM "{tname}"')
+                    count = cursor.fetchone()[0]
+                except Exception:
+                    count = 0
             tables.append({
                 "name":        tname,
                 "row_count":   count,
@@ -117,6 +130,7 @@ async def delete_table(table_name: str):
         cursor.close()
         conn.close()
         invalidate_schema_cache()
+        invalidate_profile_cache(table_name)
         return {"message": f"Table '{table_name}' deleted"}
     except Exception as e:
         raise HTTPException(500, str(e))

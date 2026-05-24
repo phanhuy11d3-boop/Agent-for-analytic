@@ -1,6 +1,6 @@
-# AI Fraud Analyst — Multi-Agent Data Analysis System
+# AI Data Analyst — Multi-Agent Analysis System
 
-A multi-agent AI system that converts natural language questions into SQL queries, analyzes results, and generates HTML reports — powered by Google Gemini and LangGraph.
+A multi-agent AI system that converts natural language questions into SQL queries, analyzes results, and generates HTML reports — powered by DeepSeek V4 and LangGraph.
 
 ---
 
@@ -10,28 +10,34 @@ A multi-agent AI system that converts natural language questions into SQL querie
 User Question
      │
      ▼
-┌─────────────┐     SQL + raw data     ┌──────────────────┐     KPIs + insights     ┌──────────────┐
-│  Data Agent │ ──────────────────────▶│ Analytics Agent  │ ──────────────────────▶│ Writer Agent │
-│             │                        │                  │                         │              │
-│ NL → SQL    │                        │ Insight + KPIs   │                         │ HTML Report  │
-│ Execute DB  │                        │ Anomaly detect   │                         │ Save to disk │
-└─────────────┘                        └──────────────────┘                         └──────────────┘
-                                              │ error → END
+┌─────────────┐   SQL + raw data   ┌──────────────────┐   KPIs + insights   ┌──────────────┐
+│  Data Agent │ ─────────────────▶ │ Analytics Agent  │ ──────────────────▶ │ Critic Agent │
+│             │        ▲           │                  │                     │              │
+│ NL → SQL    │        │           │ Stats + chi-sq   │                     │ QA review    │
+│ Execute DB  │        │           │ ANOVA + corr     │                     │ Feedback loop│
+└─────────────┘        │           └──────────────────┘                     └──────┬───────┘
+                       │                                                           │ approve
+                       └─────────────── needs_more_data (max 2 rounds) ───────────┤
+                                                                                   ▼
+                                                                          ┌──────────────┐
+                                                                          │ Writer Agent │
+                                                                          │ HTML Report  │
+                                                                          └──────────────┘
 ```
 
-State flows through a LangGraph `StateGraph`. Pipeline is fixed (Data → Analytics → Writer) with a conditional edge that short-circuits to END on SQL error.
+State flows through a LangGraph `StateGraph`. The Critic Agent can send feedback to loop Data Agent up to 2 times. A conditional edge short-circuits to END on SQL error or empty result.
 
 ---
 
 ## Tech Stack
 
-| Layer       | Technology                  |
-|-------------|-----------------------------|
-| LLM         | Google Gemini `gemini-2.0-flash` |
-| Agent Framework | LangGraph `StateGraph`  |
-| Database    | Supabase PostgreSQL (`psycopg2-binary`) |
-| Web Server  | FastAPI + WebSocket         |
-| Frontend    | Vanilla HTML / CSS / JS     |
+| Layer | Technology |
+|-------|------------|
+| LLM | DeepSeek V4 Flash via 9router (`oc/deepseek-v4-flash-free`) |
+| Agent Framework | LangGraph `StateGraph` |
+| Database | Supabase PostgreSQL (`psycopg2-binary`) |
+| Web Server | FastAPI + WebSocket |
+| Frontend | Vanilla HTML / CSS / JS |
 
 ---
 
@@ -40,25 +46,28 @@ State flows through a LangGraph `StateGraph`. Pipeline is fixed (Data → Analyt
 ```
 Agent-Analytic/
 ├── agents/
-│   ├── data_agent.py        # NL → SQL → execute → raw_data
-│   ├── analytics_agent.py   # raw_data → KPIs + insights (JSON)
-│   └── writer_agent.py      # data + insights → HTML report
+│   ├── data_agent.py        # NL → SQL → execute → raw_data (1 auto-retry)
+│   ├── analytics_agent.py   # raw_data → stats + chi-square + ANOVA → KPIs + insights
+│   ├── critic_agent.py      # QA review → approve or request more data (max 2 rounds)
+│   └── writer_agent.py      # analytics + raw_data → HTML report
 ├── tools/
 │   ├── sql_executor.py      # execute_sql() — read-only, blocks DDL
-│   └── schema_provider.py   # get_schema() — hardcoded schema string
+│   ├── schema_provider.py   # get_schema() — dynamic, cached, invalidatable
+│   └── dataset_uploader.py  # upload_dataframe() — creates ds_ tables
 ├── web/
 │   ├── app.py               # FastAPI: GET /, WS /ws/analyze, GET /reports/{file}
+│   ├── routers/
+│   │   └── upload.py        # POST /api/upload, GET /api/tables, DELETE /api/tables/{name}
 │   └── static/              # index.html, style.css, app.js
 ├── tests/
-│   └── test_db.py           # DB connection + sample queries
+│   ├── test_db.py           # DB connection + sample queries
+│   └── test_analytics.py    # Analytics agent unit tests
 ├── reports/                 # Generated HTML reports (gitignored)
-├── config.py                # Load .env, expose DB/LLM constants
+├── config.py                # Load .env, DB/LLM constants, provider routing
 ├── state.py                 # AgentState TypedDict
 ├── graph.py                 # LangGraph graph: build + stream
 ├── html_report.py           # HTML report builder
-├── main.py                  # Entry point: py main.py
-├── .env.example             # Environment variable template
-└── requirements.txt
+└── main.py                  # Entry point: py main.py
 ```
 
 ---
@@ -68,8 +77,8 @@ Agent-Analytic/
 ### Prerequisites
 
 - Python 3.11+
-- A Supabase PostgreSQL database
-- Google Gemini API key
+- Supabase PostgreSQL database
+- 9router running locally at `http://localhost:20128` (or another OpenAI-compatible provider)
 
 ### Installation
 
@@ -79,17 +88,28 @@ pip install -r requirements.txt
 
 ### Environment Variables
 
-Copy `.env.example` to `.env` and fill in your values:
+Create a `.env` file:
 
-```powershell
-copy .env.example .env
+```env
+# Database
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+
+# LLM Provider (ninerouter | openrouter | groq)
+LLM_PROVIDER=ninerouter
+
+# 9router (active)
+NINEROUTER_API_KEY=your-key
+NINEROUTER_BASE_URL=http://localhost:20128/v1
+NINEROUTER_MODEL=oc/deepseek-v4-flash-free
+
+# OpenRouter (fallback)
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MODELS=openrouter/free
+
+# Groq (fallback)
+GROQ_API_KEY=gsk_...
+GROQ_MODEL=llama-3.3-70b-versatile
 ```
-
-| Variable       | Description                              |
-|----------------|------------------------------------------|
-| `DATABASE_URL` | PostgreSQL connection string (URL-encoded password supported) |
-| `GOOGLE_API_KEY` | Google Gemini API key                  |
-| `GEMINI_MODEL` | Model name (default: `gemini-2.0-flash`) |
 
 ### Run
 
@@ -105,25 +125,36 @@ Open `http://localhost:8000`
 
 ### Web UI
 
-1. Type a question in the input box (e.g. *"What is the fraud rate by payment method?"*)
-2. Click **Analyze** or press `Ctrl+Enter`
-3. Watch the agent pipeline execute in real time
-4. View the generated HTML report in the right panel
+1. Select or upload a dataset (CSV/Excel, max 50 MB)
+2. Type a question (e.g. *"What is the fraud rate by payment method?"*)
+3. Click **Analyze** or press `Ctrl+Enter`
+4. Watch the agent pipeline execute in real time
+5. View the generated HTML report in the right panel
 
 ### WebSocket API
 
 ```
 WS  ws://localhost:8000/ws/analyze
-    → send: {"question": "..."}
-    ← recv: {"type": "start" | "step" | "complete" | "error", ...}
+    → send: {"question": "...", "selected_table": "table_name"}
+    ← recv: {"type": "start" | "step" | "heartbeat" | "complete" | "error", ...}
+```
+
+### REST API
+
+```
+POST /api/upload              # Upload CSV/Excel
+GET  /api/tables              # List tables with row counts
+DELETE /api/tables/{name}     # Delete uploaded table (ds_ prefix only)
+POST /api/reanalyze           # Re-run analytics on provided rows
 ```
 
 ---
 
 ## Agents
 
-| Agent            | Input                  | Output                              |
-|------------------|------------------------|-------------------------------------|
-| Data Agent       | question + DB schema   | SQL query + raw data rows           |
-| Analytics Agent  | raw data + question    | KPIs, insights, anomalies (JSON)    |
-| Writer Agent     | analytics + raw data   | HTML report saved to `reports/`     |
+| Agent | Input | Output |
+|-------|-------|--------|
+| Data Agent | question + DB schema | SQL query + raw data rows (1 auto-retry on SQL error) |
+| Analytics Agent | raw data + question | Chi-square, ANOVA, correlations, KPIs, insights (JSON) |
+| Critic Agent | analytics output + question | approve or needs_more_data with feedback (max 2 loops) |
+| Writer Agent | analytics + raw data | HTML report saved to `reports/` |

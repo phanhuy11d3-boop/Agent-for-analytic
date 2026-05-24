@@ -9,3 +9,4 @@ venv/
 .claude/
 MEMORY.md
 test_*.csv
+scratch/

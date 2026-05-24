@@ -1,90 +1,127 @@
 import json
 import re
-from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage
-from config import GROQ_API_KEY, GROQ_MODEL
+from typing import Any
+
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from config import invoke_groq
+from tools.report_quality import validate_report_spec
+
 
 MAX_CRITIC_ROUNDS = 2
 
-SYSTEM_PROMPT = """You are a Senior Analytics Critic. Your job is to evaluate whether an analytics result
-sufficiently answers the original business question, or whether additional data is needed.
+SYSTEM_PROMPT = """You are a generic analytics quality reviewer.
+Review whether the report specification answers the user's question without overclaiming.
 
-Review:
-1. Does the SQL query actually capture what the question asks?
-2. Are the insights grounded in the data shown (not speculative)?
-3. Is there an obvious missing angle — comparison, baseline, time trend, segment breakdown?
-
-Return ONLY a valid JSON object:
+Return only valid JSON:
 {
   "verdict": "approve" or "needs_more_data",
-  "feedback": "one concise sentence explaining your decision",
-  "suggested_focus": "if needs_more_data: what specific query or angle is missing. Otherwise empty string."
+  "feedback": "one concise sentence",
+  "suggested_focus": "specific missing angle if more data is truly required, otherwise empty"
 }
 
-Be decisive. Only request more data if it would materially change the conclusion.
-Do NOT request more data just to be thorough — approve if the current data is sufficient."""
+Reject only when a fix would materially improve correctness. Pay special attention to:
+- sample rows being mistaken for full-table evidence
+- missing outcome validation for decision or definition questions
+- charts that do not match available columns
+- unsupported good/bad or causal claims
+"""
 
 
-def _parse(text: str) -> dict:
-    text = text.strip()
+def _parse(text: str) -> dict[str, Any]:
+    text = (text or "").strip()
     text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"```$", "", text).strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r'\{.*\}', text, re.DOTALL)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             try:
                 return json.loads(match.group())
             except json.JSONDecodeError:
                 pass
-    return {"verdict": "approve", "feedback": "Could not parse critic response — proceeding.", "suggested_focus": ""}
+    return {"verdict": "approve", "feedback": "Reviewer response could not be parsed; deterministic checks passed.", "suggested_focus": ""}
 
 
-def _format_sample(raw_data: list, columns: list) -> str:
-    if not raw_data:
-        return "No data."
-    sample = raw_data[:10]
-    header = ", ".join(columns)
-    lines = [", ".join(str(row.get(c, "")) for c in columns) for row in sample]
-    return f"Columns: {header}\n" + "\n".join(lines) + (f"\n... ({len(raw_data) - 10} more rows)" if len(raw_data) > 10 else "")
+def _deterministic_review(state: dict) -> dict[str, str] | None:
+    report_spec = state.get("report_spec") or {}
+    intent = report_spec.get("intent") or {}
+    warnings = report_spec.get("warnings") or []
+    data_scope = report_spec.get("data_scope") or {}
+
+    if not report_spec:
+        return {
+            "verdict": "needs_more_data",
+            "feedback": "No report specification was produced.",
+            "suggested_focus": "Build a report specification before writing the report.",
+        }
+
+    if report_spec.get("mode") == "context_required":
+        return None
+
+    quality_issues = validate_report_spec(report_spec)
+    blockers = [issue for issue in quality_issues if issue.get("severity") == "blocker"]
+    if blockers:
+        issue = blockers[0]
+        return {
+            "verdict": "needs_more_data",
+            "feedback": issue.get("message", "Report quality gate failed."),
+            "suggested_focus": issue.get("code", "Fix report quality before rendering."),
+        }
+
+    if intent.get("requires_validation") and report_spec.get("evidence_level") == "descriptive":
+        return {
+            "verdict": "needs_more_data",
+            "feedback": "The question requires validation but the report has only descriptive evidence.",
+            "suggested_focus": "Identify whether the table has any candidate outcome column or explicitly state proxy-only evidence.",
+        }
+
+    if data_scope.get("source") == "sample_profile" and not warnings:
+        return {
+            "verdict": "needs_more_data",
+            "feedback": "Sample-only analysis must carry an explicit scope warning.",
+            "suggested_focus": "Add a scope warning that profiling is based on preview rows only.",
+        }
+
+    return None
 
 
 def critic_agent_node(state: dict) -> dict:
-    question  = state["question"]
-    sql_query = state.get("sql_query", "")
-    raw_data  = state.get("raw_data", [])
-    columns   = state.get("columns", [])
-    analytics = state.get("analytics", {}) or {}
-    rounds    = state.get("critic_rounds", 0)
+    rounds = state.get("critic_rounds", 0)
+    quality_issues = validate_report_spec(state.get("report_spec") or {})
+    deterministic = _deterministic_review(state)
 
-    llm = ChatGroq(model=GROQ_MODEL, api_key=GROQ_API_KEY, temperature=0)
+    if deterministic:
+        result = deterministic
+    else:
+        messages = [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=json.dumps({
+                "question": state.get("question", ""),
+                "data_scope": (state.get("report_spec") or {}).get("data_scope", {}),
+                "evidence_level": state.get("evidence_level"),
+                "warnings": state.get("warnings", []),
+                "report_spec": state.get("report_spec", {}),
+                "analytics": state.get("analytics", {}),
+            }, ensure_ascii=False, default=str)),
+        ]
+        try:
+            result = _parse(invoke_groq(messages, temperature=0).content)
+        except Exception:
+            result = {"verdict": "approve", "feedback": "Deterministic review passed; LLM review was unavailable.", "suggested_focus": ""}
 
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=(
-            f"Original question: {question}\n\n"
-            f"SQL used:\n{sql_query}\n\n"
-            f"Data sample ({len(raw_data)} rows total):\n{_format_sample(raw_data, columns)}\n\n"
-            f"Analytics output:\n"
-            f"Summary: {analytics.get('summary', '')}\n"
-            f"KPIs: {analytics.get('kpis', [])}\n"
-            f"Insights: {analytics.get('insights', [])}\n"
-            f"Recommendation: {analytics.get('recommendation', '')}"
-        )),
-    ]
-
-    result = _parse(llm.invoke(messages).content)
-    verdict         = result.get("verdict", "approve")
-    feedback        = result.get("feedback", "")
+    verdict = result.get("verdict", "approve")
+    feedback = result.get("feedback", "")
     suggested_focus = result.get("suggested_focus", "")
 
     step = {
-        "agent":   "Critic Agent",
-        "icon":    "🔍",
-        "status":  "success",
+        "agent": "Critic Agent",
+        "icon": "QA",
+        "status": "success",
         "verdict": verdict,
         "message": feedback,
+        "quality_issues": quality_issues,
     }
 
     critic_feedback = None
@@ -93,7 +130,8 @@ def critic_agent_node(state: dict) -> dict:
 
     return {
         **state,
+        "quality_issues": quality_issues,
         "critic_feedback": critic_feedback,
-        "critic_rounds":   rounds + 1,
-        "steps":           state.get("steps", []) + [step],
+        "critic_rounds": rounds + 1,
+        "steps": state.get("steps", []) + [step],
     }

@@ -19,6 +19,8 @@ def writer_agent_node(state: dict) -> dict:
         raw_data  = state.get("raw_data", []),
         columns   = state.get("columns", []),
         analytics = analytics,
+        report_spec = state.get("report_spec"),
+        table_profile = state.get("table_profile"),
     )
 
     filename = Path(report_path).name

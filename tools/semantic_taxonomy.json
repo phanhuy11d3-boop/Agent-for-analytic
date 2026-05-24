@@ -1,0 +1,111 @@
+{
+  "roles": {
+    "identifier": {
+      "exact": ["id"],
+      "prefixes": ["id_"],
+      "suffixes": ["_id", "_key", "_code"],
+      "tokens": ["uuid", "identifier"]
+    },
+    "datetime": {
+      "tokens": ["date", "time", "timestamp", "created", "updated", "year", "month", "day"],
+      "type_hints": ["date", "time", "timestamp"]
+    },
+    "measure": {
+      "tokens": ["amount", "price", "value", "cost", "revenue", "total", "fee", "balance", "salary", "pay", "sum", "quantity", "count", "score", "rate"],
+      "type_hints": ["integer", "numeric", "double", "real", "decimal"]
+    },
+    "outcome": {
+      "tokens": ["target", "label", "outcome", "result"],
+      "type_hints": ["boolean"]
+    },
+    "binary_flag": {
+      "tokens": ["flag", "status", "state", "class", "approved", "rejected", "verified", "unverified", "success", "failed", "error", "risk", "fraud", "churn", "default", "spam", "fake", "anomaly"],
+      "prefixes": ["is_", "has_", "flag_"],
+      "type_hints": ["boolean"]
+    },
+    "dimension": {
+      "tokens": ["type", "category", "segment", "group", "region", "city", "country", "channel", "method", "source", "level", "tier", "grade", "priority", "severity"],
+      "type_hints": ["character", "text", "varchar"]
+    },
+    "text": {
+      "tokens": ["name", "description", "comment", "note", "title", "message"],
+      "type_hints": ["text", "varchar", "character"]
+    }
+  },
+  "binary_values": {
+    "positive": ["1", "true", "yes", "y"],
+    "negative": ["0", "false", "no", "n"]
+  },
+  "concepts": {
+    "repayment_capacity": {
+      "question_terms": [
+        "repay",
+        "repayment",
+        "pay back",
+        "payment ability",
+        "creditworthy",
+        "solvency",
+        "tra no",
+        "kha nang tra no",
+        "uy tin",
+        "tin dung"
+      ],
+      "strong_column_terms": [
+        "income",
+        "salary",
+        "annuity",
+        "score",
+        "source",
+        "external",
+        "employment",
+        "employed"
+      ],
+      "supporting_column_terms": [
+        "credit",
+        "loan",
+        "debt",
+        "payment",
+        "bureau",
+        "overdue",
+        "delinquency",
+        "default"
+      ],
+      "low_priority_column_terms": [
+        "req",
+        "request",
+        "inquiry",
+        "hour",
+        "week",
+        "mon",
+        "qrt"
+      ]
+    },
+    "performance_or_result": {
+      "question_terms": [
+        "result",
+        "outcome",
+        "success",
+        "failure",
+        "good",
+        "bad",
+        "tot",
+        "xau",
+        "hieu qua",
+        "ket qua"
+      ],
+      "strong_column_terms": [
+        "target",
+        "label",
+        "outcome",
+        "result",
+        "score",
+        "rating"
+      ],
+      "supporting_column_terms": [
+        "status",
+        "success",
+        "failed"
+      ]
+    }
+  }
+}

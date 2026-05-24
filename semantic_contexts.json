@@ -1,0 +1,19 @@
+{
+  "contexts": {
+    "ds_application_test_14": {
+      "context": {
+        "column_descriptions": {},
+        "confirmed": true,
+        "negative_outcome_value": "",
+        "outcome_column": "",
+        "positive_outcome_value": "",
+        "primary_metric": "ext_source_2",
+        "row_grain": "One row represents one loan application / applicant snapshot, identified by sk_id_curr.",
+        "table_name": "ds_application_test_14",
+        "table_purpose": "Applicant-level loan application data used to assess credit risk and repayment-capacity proxies before loan approval. This test table does not contain actual repayment outcome."
+      },
+      "schema_fingerprint": "7e82b9eff1add26e"
+    }
+  },
+  "version": 1
+}

@@ -3,131 +3,269 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Fraud Analyst</title>
-<link rel="stylesheet" href="/static/style.css">
+<title>Maxxem</title>
+<link rel="stylesheet" href="/static/style.css?v=maxxem-ui-20260524-2">
 </head>
 <body>
 
-<header>
-  <span style="font-size:1.3rem">🔍</span>
-  <h1>AI Fraud Analyst</h1>
-  <span class="badge">Multi-Agent</span>
-  <div class="dot"></div>
-</header>
-
-<main>
-  <!-- ─── LEFT PANEL ─────────────────────────── -->
-  <aside class="left-panel">
-
-    <!-- Dataset selector -->
-    <div class="dataset-section">
-      <div class="dataset-header">
-        <label class="section-label">Dataset</label>
-        <button id="btn-refresh-tables" class="btn-icon" title="Refresh list">⟳</button>
-      </div>
-      <select id="dataset-select" class="dataset-select">
-        <option value="">All tables</option>
-      </select>
+<div class="app-shell">
+  <aside class="sidebar" aria-label="Maxxem navigation">
+    <div class="brand-lockup">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Maxxem</span>
     </div>
 
-    <!-- Upload -->
-    <div class="upload-section">
-      <label class="section-label">Upload CSV / Excel</label>
-      <div class="upload-drop" id="upload-drop">
-        <input type="file" id="file-input" accept=".csv,.xlsx,.xls" hidden>
-        <span class="upload-icon">📂</span>
-        <span id="upload-label">Drop file or click to browse</span>
-        <span class="upload-hint">First sheet imported for Excel · Max 50 MB</span>
-      </div>
-      <div id="upload-status" class="upload-status" style="display:none"></div>
-    </div>
+    <nav class="sidebar-nav" aria-label="Primary">
+      <button id="btn-new-chat" class="nav-item nav-item-primary" type="button">
+        <span class="nav-icon">+</span>
+        <span>New chat</span>
+      </button>
+      <button id="btn-discover" class="nav-item" type="button">
+        <span class="nav-icon">O</span>
+        <span>Discover</span>
+      </button>
+      <button id="btn-datasets-panel" class="nav-item" type="button">
+        <span class="nav-icon">D</span>
+        <span>Datasets</span>
+      </button>
+      <button id="btn-history-toggle" class="nav-item nav-item-muted" type="button">
+        <span>History</span>
+        <span class="nav-chevron">v</span>
+      </button>
+    </nav>
 
-    <!-- Input -->
-    <div class="input-section">
-      <label for="question-input">Ask a question</label>
-      <textarea
-        id="question-input"
-        placeholder="e.g. What is the fraud rate by payment method?"
-        rows="3"
-      ></textarea>
-      <button id="btn-analyze" class="btn-analyze">✨ Analyze</button>
-    </div>
+    <div class="sidebar-spacer"></div>
 
-    <!-- Agent pipeline status -->
-    <div class="agents-section">
-      <h3>Agent Pipeline</h3>
+    <button class="upgrade-card" type="button">
+      <span>Upgrade plan</span>
+      <span class="upgrade-rocket" aria-hidden="true"></span>
+    </button>
 
-      <div class="agent-row" id="agent-data_agent">
-        <span class="agent-icon">🗄️</span>
-        <div style="flex:1">
-          <div class="agent-name">Data Agent</div>
-          <div class="agent-msg"></div>
-        </div>
-        <div class="agent-status-dot"></div>
-      </div>
-
-      <div class="agent-row" id="agent-analytics_agent">
-        <span class="agent-icon">📊</span>
-        <div style="flex:1">
-          <div class="agent-name">Analytics Agent</div>
-          <div class="agent-msg"></div>
-        </div>
-        <div class="agent-status-dot"></div>
-      </div>
-
-      <div class="agent-row" id="agent-critic_agent">
-        <span class="agent-icon">🔍</span>
-        <div style="flex:1">
-          <div class="agent-name">Critic Agent</div>
-          <div class="agent-msg"></div>
-        </div>
-        <div class="agent-status-dot"></div>
-      </div>
-
-      <div class="agent-row" id="agent-writer_agent">
-        <span class="agent-icon">✍️</span>
-        <div style="flex:1">
-          <div class="agent-name">Writer Agent</div>
-          <div class="agent-msg"></div>
-        </div>
-        <div class="agent-status-dot"></div>
-      </div>
-    </div>
-
-    <!-- Suggested questions -->
-    <div class="suggestions-section">
-      <h3>Suggested Questions</h3>
-      <button class="suggestion-chip">What is the fraud rate by payment method?</button>
-      <button class="suggestion-chip">Which location has the highest fraud rate?</button>
-      <button class="suggestion-chip">Compare fraud rate between Mobile, Tablet, and Desktop</button>
-      <button class="suggestion-chip">Which merchant categories have fraud rate above 40%?</button>
-      <button class="suggestion-chip">What is the overall fraud rate in the dataset?</button>
-      <button class="suggestion-chip">Show top 10 customers with most fraud transactions</button>
-      <button class="suggestion-chip">How does account age correlate with fraud risk?</button>
-    </div>
-
+    <button class="user-card" type="button">
+      <span class="avatar">H</span>
+      <span class="username">Huu</span>
+      <span class="user-chevron">v</span>
+    </button>
   </aside>
 
-  <!-- ─── RIGHT PANEL ────────────────────────── -->
-  <section class="right-panel">
+  <main class="main-panel">
+    <a id="report-link" class="report-link" target="_blank" href="#">Open report</a>
 
-    <div class="right-panel-header">
-      <span>Report</span>
-      <a id="report-link" class="report-link" target="_blank" href="#">↗ Open in new tab</a>
+    <section id="home-view" class="home-view" aria-label="Maxxem home">
+      <div id="hero-section" class="hero-section">
+        <h1 class="hero-title">
+          AI for serious data work, unlock <mark>100x efficiency</mark>
+        </h1>
+        <p class="hero-copy">Built for teams that need trustworthy, fast data decisions.</p>
+      </div>
+
+      <section id="feature-grid" class="feature-grid" aria-label="Maxxem data tools">
+        <article class="feature-card promo-card">
+          <span class="promo-badge">New!</span>
+          <h2 class="promo-kicker">Meet<br>Maxxem <em>Bloom</em></h2>
+          <div class="agent-orbs" aria-hidden="true">
+            <span class="agent-orb orb-a"></span>
+            <span class="agent-orb orb-b"></span>
+            <span class="agent-orb orb-c"></span>
+            <span class="agent-orb orb-d"></span>
+            <span class="agent-orb orb-e"></span>
+          </div>
+          <p class="promo-subtitle">Your AI Data Agents Team!</p>
+          <button class="promo-button feature-action" type="button" data-open-workspace>Launch in 1 Click &gt;</button>
+        </article>
+
+        <article class="feature-card report-generator-card">
+          <h3 class="feature-title"><span class="feature-icon">AI</span>AI Data Report Generator</h3>
+          <p class="feature-desc">Upload your files, click, and your insightful visuals will be ready in minutes.</p>
+          <div class="feature-actions">
+            <button class="feature-action primary" type="button" data-question="Summarize the dataset and key fields">Try our demo</button>
+            <button class="feature-action secondary" type="button" data-open-workspace>Get started</button>
+          </div>
+          <div class="chart-preview" aria-hidden="true">
+            <div class="chart-labels"><span></span><span></span><span></span></div>
+            <div class="chart-bars">
+              <span style="height:35%"></span>
+              <span style="height:70%"></span>
+              <span style="height:48%"></span>
+              <span style="height:86%"></span>
+              <span style="height:60%"></span>
+            </div>
+          </div>
+        </article>
+
+        <article class="feature-card processing-card">
+          <h3 class="feature-title"><span class="feature-icon">DP</span>Data Processing Helper</h3>
+          <button class="feature-action" type="button" data-question="Find missing data patterns and possible issues">Get started &gt;</button>
+        </article>
+
+        <article class="feature-card mini-card">
+          <h3 class="feature-title"><span class="feature-icon">DV</span>Data Visualization</h3>
+          <button class="feature-action" type="button" data-question="Compare averages across important segments">Get started &gt;</button>
+        </article>
+
+        <article class="feature-card mini-card">
+          <h3 class="feature-title"><span class="feature-icon">TF</span>Trend Forecasting</h3>
+          <button class="feature-action" type="button" data-question="Highlight notable trends and changes over time">Get started &gt;</button>
+        </article>
+
+        <article class="feature-card mini-card">
+          <h3 class="feature-title"><span class="feature-icon">DC</span>Data Cleaner</h3>
+          <button class="feature-action" type="button" data-question="Find missing data patterns and possible issues">Get started &gt;</button>
+        </article>
+      </section>
+
+      <div id="placeholder" class="analysis-status">
+        <div class="status-icon" aria-hidden="true"></div>
+        <p>Ask a question to generate a report</p>
+      </div>
+    </section>
+
+    <section id="report-view" class="report-view" aria-label="Generated report" style="display:none">
+      <div class="report-toolbar">
+        <button id="btn-report-home" class="ghost-button" type="button">Back to home</button>
+        <span>Generated report</span>
+      </div>
+      <iframe id="report-frame" style="display:none"></iframe>
+    </section>
+
+    <section class="bottom-input-bar" aria-label="Ask Maxxem">
+      <button id="upload-drop" class="add-files-button" type="button">
+        <input type="file" id="file-input" accept=".csv,.xlsx,.xls" hidden>
+        <span class="add-icon">+</span>
+        <span id="upload-label">Add files</span>
+      </button>
+
+      <button class="stack-button" type="button" aria-label="Data layers">
+        <span aria-hidden="true">=</span>
+      </button>
+
+      <textarea
+        id="question-input"
+        placeholder="Analyze with files, quickly gain insights."
+        rows="1"
+      ></textarea>
+
+      <div class="mode-toggle" aria-label="Analysis mode">
+        <button class="mode-pill active" data-mode="general" type="button">General mode</button>
+        <button class="mode-pill" data-mode="advanced" type="button">Advanced mode</button>
+      </div>
+
+      <button id="btn-analyze" class="start-chat-button" type="button">
+        Analyze
+      </button>
+    </section>
+    <div id="upload-status" class="upload-status" style="display:none"></div>
+  </main>
+</div>
+
+<div id="workspace-backdrop" class="workspace-backdrop" hidden></div>
+
+<aside id="workspace-panel" class="workspace-panel" aria-label="Dataset and semantic workspace" aria-hidden="true">
+  <div class="workspace-header">
+    <div>
+      <p class="eyebrow">Workspace</p>
+      <h2>Datasets and context</h2>
     </div>
+    <button id="btn-close-workspace" class="icon-button" type="button" aria-label="Close workspace">x</button>
+  </div>
 
-    <!-- Placeholder before first report -->
-    <div id="placeholder">
-      <div class="big-icon">📈</div>
-      <p>Ask a question to generate a report</p>
+  <section class="workspace-section dataset-section">
+    <div class="dataset-header">
+      <label class="section-label" for="dataset-select">Dataset</label>
+      <button id="btn-refresh-tables" class="btn-icon" type="button" title="Refresh list">Refresh</button>
     </div>
-
-    <!-- Report iframe — hidden until report is ready -->
-    <iframe id="report-frame" style="display:none"></iframe>
-
+    <select id="dataset-select" class="dataset-select">
+      <option value="">All tables</option>
+    </select>
   </section>
-</main>
 
-<script src="/static/app.js"></script>
+  <section class="workspace-section semantic-section">
+    <div class="dataset-header">
+      <label class="section-label">Semantic context</label>
+      <button id="btn-save-semantic" class="btn-icon" type="button" title="Save semantic context">Save</button>
+    </div>
+    <div id="semantic-status" class="semantic-status">Select a table to load context.</div>
+
+    <label class="field-label" for="semantic-purpose">Business purpose</label>
+    <textarea id="semantic-purpose" rows="2" placeholder="What business process or decision does this table support?"></textarea>
+
+    <label class="field-label" for="semantic-grain">Row grain</label>
+    <input id="semantic-grain" class="semantic-input" placeholder="What does one row represent?">
+
+    <label class="field-label" for="semantic-outcome">Outcome column</label>
+    <input id="semantic-outcome" class="semantic-input" list="semantic-columns" placeholder="Confirmed label/status/business outcome">
+
+    <label class="field-label" for="semantic-positive">Positive outcome value</label>
+    <input id="semantic-positive" class="semantic-input" placeholder="Value that means desired/positive outcome">
+
+    <label class="field-label" for="semantic-metric">Primary metric</label>
+    <input id="semantic-metric" class="semantic-input" list="semantic-columns" placeholder="Main metric to compare or optimize">
+    <datalist id="semantic-columns"></datalist>
+
+    <div class="semantic-actions">
+      <button id="btn-save-semantic-bottom" class="btn-save-context" type="button">Save context</button>
+      <button id="btn-analyze-context" class="btn-analyze-context" type="button">Run Analyze</button>
+    </div>
+  </section>
+
+  <section class="workspace-section agents-section">
+    <h3>Agent pipeline</h3>
+
+    <div class="agent-row" id="agent-semantic_agent">
+      <span class="agent-icon">CTX</span>
+      <div class="agent-copy">
+        <div class="agent-name">Semantic Agent</div>
+        <div class="agent-msg"></div>
+      </div>
+      <div class="agent-status-dot"></div>
+    </div>
+
+    <div class="agent-row" id="agent-data_agent">
+      <span class="agent-icon">DB</span>
+      <div class="agent-copy">
+        <div class="agent-name">Data Agent</div>
+        <div class="agent-msg"></div>
+      </div>
+      <div class="agent-status-dot"></div>
+    </div>
+
+    <div class="agent-row" id="agent-analytics_agent">
+      <span class="agent-icon">AN</span>
+      <div class="agent-copy">
+        <div class="agent-name">Analytics Agent</div>
+        <div class="agent-msg"></div>
+      </div>
+      <div class="agent-status-dot"></div>
+    </div>
+
+    <div class="agent-row" id="agent-critic_agent">
+      <span class="agent-icon">QA</span>
+      <div class="agent-copy">
+        <div class="agent-name">Critic Agent</div>
+        <div class="agent-msg"></div>
+      </div>
+      <div class="agent-status-dot"></div>
+    </div>
+
+    <div class="agent-row" id="agent-writer_agent">
+      <span class="agent-icon">WR</span>
+      <div class="agent-copy">
+        <div class="agent-name">Writer Agent</div>
+        <div class="agent-msg"></div>
+      </div>
+      <div class="agent-status-dot"></div>
+    </div>
+  </section>
+
+  <section class="workspace-section suggestions-section">
+    <h3>Suggested questions</h3>
+    <button class="suggestion-chip" type="button">Summarize the dataset and key fields</button>
+    <button class="suggestion-chip" type="button">Which categories have the highest counts?</button>
+    <button class="suggestion-chip" type="button">Compare averages across important segments</button>
+    <button class="suggestion-chip" type="button">Find missing data patterns and possible issues</button>
+  </section>
+</aside>
+
+<script src="/static/app.js?v=maxxem-ui-20260524-2"></script>
 </body>
 </html>
