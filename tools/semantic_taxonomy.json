@@ -11,7 +11,7 @@
       "type_hints": ["date", "time", "timestamp"]
     },
     "measure": {
-      "tokens": ["amount", "price", "value", "cost", "revenue", "total", "fee", "balance", "salary", "pay", "sum", "quantity", "count", "score", "rate"],
+      "tokens": ["amount", "price", "value", "cost", "revenue", "sales", "total", "fee", "balance", "salary", "pay", "spend", "spending", "sum", "quantity", "count", "score", "rate"],
       "type_hints": ["integer", "numeric", "double", "real", "decimal"]
     },
     "outcome": {
@@ -19,12 +19,12 @@
       "type_hints": ["boolean"]
     },
     "binary_flag": {
-      "tokens": ["flag", "status", "state", "class", "approved", "rejected", "verified", "unverified", "success", "failed", "error", "risk", "fraud", "churn", "default", "spam", "fake", "anomaly"],
+      "tokens": ["flag", "status", "class", "approved", "rejected", "verified", "unverified", "success", "failed", "error", "risk", "fraud", "churn", "default", "spam", "fake", "anomaly"],
       "prefixes": ["is_", "has_", "flag_"],
       "type_hints": ["boolean"]
     },
     "dimension": {
-      "tokens": ["type", "category", "segment", "group", "region", "city", "country", "channel", "method", "source", "level", "tier", "grade", "priority", "severity"],
+      "tokens": ["type", "category", "segment", "group", "region", "city", "state", "province", "country", "channel", "method", "source", "level", "tier", "grade", "priority", "severity"],
       "type_hints": ["character", "text", "varchar"]
     },
     "text": {
@@ -36,7 +36,38 @@
     "positive": ["1", "true", "yes", "y"],
     "negative": ["0", "false", "no", "n"]
   },
+  "proposal_hints": {
+    "strong_outcome_name_terms": ["target", "label", "outcome", "result", "converted", "churn", "default", "fraud"],
+    "weak_outcome_name_terms": ["status", "state", "class", "success", "failure", "approved", "rejected", "risk"],
+    "positive_values": ["1", "true", "yes", "y", "success", "approved", "paid", "complete", "completed", "converted", "active", "default", "fraud", "churned"],
+    "negative_values": ["0", "false", "no", "n", "failed", "rejected", "unpaid", "incomplete", "pending", "inactive", "non_default", "legit", "retained"],
+    "metric_name_terms": ["amount", "revenue", "income", "score", "rate", "value", "salary", "price", "cost", "balance", "total"],
+    "low_value_metric_terms": ["id", "key", "code", "flag", "target", "label", "status"]
+  },
+  "answerability": {
+    "outcome_required_terms": ["good", "better", "best", "bad", "worse", "reliable", "quality", "risk", "high risk", "low risk", "creditworthy", "trustworthy", "tot", "tot hon", "xau", "uy tin", "tin dung", "rui ro", "ho so tot"]
+  },
   "concepts": {
+    "revenue": {
+      "question_terms": ["revenue", "sales", "turnover", "gross sales", "net sales", "spend", "spending", "doanh thu"],
+      "strong_column_terms": ["sales", "revenue", "turnover", "net_sales", "gross_sales"],
+      "supporting_column_terms": ["amount", "value", "total", "price"]
+    },
+    "profit": {
+      "question_terms": ["profit", "margin", "gross profit", "net profit", "loi nhuan", "lai"],
+      "strong_column_terms": ["profit", "margin", "gross_profit", "net_profit"],
+      "supporting_column_terms": ["income", "earnings"]
+    },
+    "product_category": {
+      "question_terms": ["category", "product category", "product line", "product type", "danh muc", "san pham", "mat hang"],
+      "strong_column_terms": ["category", "product_category", "product_line", "sub_category", "department"],
+      "supporting_column_terms": ["product", "item", "sku", "type", "class"]
+    },
+    "geography": {
+      "question_terms": ["geography", "location", "region", "country", "state", "city", "territory", "zone", "vi tri dia ly", "dia ly", "khu vuc", "vung", "mien"],
+      "strong_column_terms": ["region", "country", "state", "province", "city", "territory", "zone", "market"],
+      "supporting_column_terms": ["area", "location"]
+    },
     "repayment_capacity": {
       "question_terms": [
         "repay",

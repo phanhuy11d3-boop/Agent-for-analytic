@@ -29,11 +29,11 @@ def validate_report_spec(report_spec: dict[str, Any]) -> list[dict[str, Any]]:
             "message": "V1 report should render no more than two charts.",
         })
 
-    if len(report_spec.get("executive_points") or []) > 5:
+    if len(report_spec.get("executive_points") or []) > 6:
         issues.append({
             "severity": "warning",
             "code": "too_many_points",
-            "message": "V1 report should contain no more than five executive points.",
+            "message": "V1 report should contain no more than six executive points.",
         })
 
     intent = report_spec.get("intent") or {}
@@ -50,6 +50,19 @@ def validate_report_spec(report_spec: dict[str, Any]) -> list[dict[str, Any]]:
             "severity": "warning",
             "code": "missing_evidence_results",
             "message": "Report has no explicit evidence results attached.",
+        })
+    profile_only_evidence_kinds = {"candidate_scores", "missingness", "numeric_summary"}
+    has_real_evidence = any(
+        item.get("success", True)
+        and item.get("data")
+        and item.get("kind") not in profile_only_evidence_kinds
+        for item in evidence_results
+    )
+    if report_spec.get("output_type") == "metric_dimension_report" and not has_real_evidence:
+        issues.append({
+            "severity": "blocker",
+            "code": "missing_business_evidence",
+            "message": "Metric/dimension reports require executed aggregate evidence, not profile-only fallback data.",
         })
 
     for chart in report_spec.get("charts") or []:

@@ -258,85 +258,94 @@ def profile_table(table_name: str, sample_limit: int = PROFILE_SAMPLE_LIMIT) -> 
         return cached
 
     warnings: list[str] = []
-    with _connect() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-            cursor.execute("SET LOCAL statement_timeout = %s", (int(SQL_TIMEOUT * 1000),))
-            meta = _column_metadata(cursor, table_name)
-            if not meta:
-                return {
-                    "success": False,
-                    "error": f"Table not found: {table_name}",
-                    "table_name": table_name,
-                    "columns": [],
-                    "warnings": ["Selected table was not found in the public schema."],
-                }
+    try:
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("SET LOCAL statement_timeout = %s", (int(SQL_TIMEOUT * 1000),))
+                meta = _column_metadata(cursor, table_name)
+                if not meta:
+                    return {
+                        "success": False,
+                        "error": f"Table not found: {table_name}",
+                        "table_name": table_name,
+                        "columns": [],
+                        "warnings": ["Selected table was not found in the public schema."],
+                    }
 
-            deep_profile_names = {col["name"] for col in meta[:PROFILE_COLUMN_LIMIT]}
-            if len(meta) > PROFILE_COLUMN_LIMIT:
-                warnings.append(
-                    f"Deep numeric/date profiling was capped at {PROFILE_COLUMN_LIMIT} columns to protect runtime; all columns still received shallow profiling."
-                )
-            if meta:
-                warnings.append(
-                    "Numeric/date min, max, and mean values are computed from the bounded sample to avoid repeated full-table scans."
-                )
-                warnings.append(
-                    "Column missing rates are estimated from the bounded sample; only total row count is computed against the full table."
-                )
-                warnings.append(
-                    "Total row count uses PostgreSQL planner statistics when available to avoid slow COUNT(*) scans."
-                )
+                deep_profile_names = {col["name"] for col in meta[:PROFILE_COLUMN_LIMIT]}
+                if len(meta) > PROFILE_COLUMN_LIMIT:
+                    warnings.append(
+                        f"Deep numeric/date profiling was capped at {PROFILE_COLUMN_LIMIT} columns to protect runtime; all columns still received shallow profiling."
+                    )
+                if meta:
+                    warnings.append(
+                        "Numeric/date min, max, and mean values are computed from the bounded sample to avoid repeated full-table scans."
+                    )
+                    warnings.append(
+                        "Column missing rates are estimated from the bounded sample; only total row count is computed against the full table."
+                    )
+                    warnings.append(
+                        "Uploaded tables use exact row counts; other tables may use PostgreSQL planner statistics to avoid slow COUNT(*) scans."
+                    )
 
-            profiled_meta = meta
-            sample_rows = _sample_rows(cursor, table_name, [col["name"] for col in meta], sample_limit)
-            sample_total = len(sample_rows)
-            total_rows = _estimated_row_count(cursor, table_name) or sample_total
+                profiled_meta = meta
+                sample_rows = _sample_rows(cursor, table_name, [col["name"] for col in meta], sample_limit)
+                sample_total = len(sample_rows)
+                total_rows = _row_count(cursor, table_name) if table_name.startswith("ds_") else (_estimated_row_count(cursor, table_name) or sample_total)
 
-            columns = []
-            for col in profiled_meta:
-                name = col["name"]
-                sample_values = [
-                    row.get(name) for row in sample_rows
-                    if row.get(name) is not None and row.get(name) != ""
-                ]
-                sample_distinct = len({str(v) for v in sample_values})
-                sample_non_null = len(sample_values)
-                missing_pct = (
-                    round(((sample_total - sample_non_null) / sample_total * 100), 2)
-                    if sample_total
-                    else 0
-                )
-                non_null = (
-                    int(round(total_rows * sample_non_null / sample_total))
-                    if sample_total
-                    else 0
-                )
-                profile = {
-                    "name": name,
-                    "data_type": col["data_type"],
-                    "is_nullable": col["is_nullable"],
-                    "row_count": total_rows,
-                    "non_null_count": non_null,
-                    "missing_count": max(total_rows - non_null, 0),
-                    "missing_pct": missing_pct,
-                    "profile_scope": "sample_estimate",
-                    "sample_distinct_count": sample_distinct,
-                    "sample_top_values": _top_values_from_sample(sample_rows, name),
-                    "is_binary_like": is_binary_like(sample_values),
-                }
+                columns = []
+                for col in profiled_meta:
+                    name = col["name"]
+                    sample_values = [
+                        row.get(name) for row in sample_rows
+                        if row.get(name) is not None and row.get(name) != ""
+                    ]
+                    sample_distinct = len({str(v) for v in sample_values})
+                    sample_non_null = len(sample_values)
+                    missing_pct = (
+                        round(((sample_total - sample_non_null) / sample_total * 100), 2)
+                        if sample_total
+                        else 0
+                    )
+                    non_null = (
+                        int(round(total_rows * sample_non_null / sample_total))
+                        if sample_total
+                        else 0
+                    )
+                    profile = {
+                        "name": name,
+                        "data_type": col["data_type"],
+                        "is_nullable": col["is_nullable"],
+                        "row_count": total_rows,
+                        "non_null_count": non_null,
+                        "missing_count": max(total_rows - non_null, 0),
+                        "missing_pct": missing_pct,
+                        "profile_scope": "sample_estimate",
+                        "sample_distinct_count": sample_distinct,
+                        "sample_top_values": _top_values_from_sample(sample_rows, name),
+                        "is_binary_like": is_binary_like(sample_values),
+                    }
 
-                if name in deep_profile_names:
-                    dtype = col["data_type"].lower()
-                    if dtype in _NUMERIC_TYPES:
-                        profile.update(_numeric_stats_from_sample(sample_values))
-                    elif any(marker in dtype for marker in _DATE_TYPE_MARKERS):
-                        profile.update(_datetime_stats_from_sample(sample_values))
+                    if name in deep_profile_names:
+                        dtype = col["data_type"].lower()
+                        if dtype in _NUMERIC_TYPES:
+                            profile.update(_numeric_stats_from_sample(sample_values))
+                        elif any(marker in dtype for marker in _DATE_TYPE_MARKERS):
+                            profile.update(_datetime_stats_from_sample(sample_values))
 
-                profile["role_candidates"] = infer_column_roles({
-                    **profile,
-                    "distinct_count": sample_distinct,
-                })
-                columns.append(profile)
+                    profile["role_candidates"] = infer_column_roles({
+                        **profile,
+                        "distinct_count": sample_distinct,
+                    })
+                    columns.append(profile)
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+            "table_name": table_name,
+            "columns": [],
+            "warnings": ["Database profiling failed before a report could be planned."],
+        }
 
     role_counts = Counter()
     for col in columns:

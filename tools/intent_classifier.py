@@ -8,8 +8,11 @@ INTENTS = {
         "what is", "what are", "define", "criteria", "meaning", "quality",
         "the nao", "la gi", "dinh nghia", "tieu chi", "uy tin",
     ],
-    "ranking": ["top", "bottom", "rank", "highest", "lowest", "best", "worst", "xep hang", "cao nhat", "thap nhat"],
-    "segmentation": ["segment", "group", "breakdown", "distribution", "phan khuc", "nhom", "phan bo"],
+    "ranking": ["top", "bottom", "rank", "highest", "lowest", "most", "least", "best", "worst", "xep hang", "cao nhat", "thap nhat"],
+    "segmentation": [
+        "segment", "group", "breakdown", "frequency distribution", "distribution",
+        "frequency", "frequencies", "histogram", "phan khuc", "nhom", "phan bo",
+    ],
     "trend": ["trend", "over time", "time series", "monthly", "daily", "weekly", "xu huong", "theo thoi gian"],
     "comparison": ["compare", "versus", "vs", "difference", "between", "so sanh", "khac nhau"],
     "driver_analysis": ["why", "driver", "factor", "impact", "affect", "cause", "nguyen nhan", "yeu to", "anh huong"],

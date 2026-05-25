@@ -83,65 +83,130 @@ def _unique_table_name(cursor, base_name: str) -> str:
     return f"{base_name}_{i}"
 
 
+def _connect():
+    conn = psycopg2.connect(
+        host=DB_HOST, port=DB_PORT, user=DB_USER,
+        password=DB_PASSWORD, dbname=DB_NAME,
+        connect_timeout=SQL_TIMEOUT,
+    )
+    conn.autocommit = False
+    return conn
+
+
+def _safe_close(conn) -> None:
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def _safe_rollback(conn) -> None:
+    try:
+        if not getattr(conn, "closed", True):
+            conn.rollback()
+    except Exception:
+        pass
+
+
+def _create_table(cursor, table_name: str, df: pd.DataFrame) -> None:
+    col_defs = ", ".join(
+        f'"{col}" {infer_pg_type(df[col])}' for col in df.columns
+    )
+    cursor.execute(f'CREATE TABLE "{table_name}" ({col_defs})')
+
+
+def _normalise_value(value):
+    if pd.isna(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            return value
+    return value
+
+
+def _insert_values(conn, table_name: str, df: pd.DataFrame, cols_str: str) -> None:
+    cursor = conn.cursor()
+    records = [
+        tuple(_normalise_value(v) for v in row)
+        for row in df.itertuples(index=False, name=None)
+    ]
+    batch_size = 5000
+    insert_sql = f'INSERT INTO "{table_name}" ({cols_str}) VALUES %s'
+    for i in range(0, len(records), batch_size):
+        psycopg2.extras.execute_values(
+            cursor,
+            insert_sql,
+            records[i:i + batch_size],
+            page_size=1000,
+        )
+    cursor.close()
+
+
 def upload_dataframe(df: pd.DataFrame, filename: str) -> dict:
     df = sanitize_columns(df.copy())
     base_name = sanitize_table_name(filename)
+    table_name = base_name
+    cols_str = ", ".join(f'"{c}"' for c in df.columns)
+    copy_error: str | None = None
 
     try:
-        conn = psycopg2.connect(
-            host=DB_HOST, port=DB_PORT, user=DB_USER,
-            password=DB_PASSWORD, dbname=DB_NAME,
-            connect_timeout=SQL_TIMEOUT,
-        )
-        conn.autocommit = False
+        conn = _connect()
     except Exception as e:
         return {"success": False, "error": str(e), "table_name": base_name}
 
     try:
         cursor = conn.cursor()
         table_name = _unique_table_name(cursor, base_name)
+        _create_table(cursor, table_name, df)
 
-        col_defs = ", ".join(
-            f"{col} {infer_pg_type(df[col])}" for col in df.columns
-        )
-        cursor.execute(f'CREATE TABLE "{table_name}" ({col_defs})')
-
-        cols_str = ", ".join(f'"{c}"' for c in df.columns)
-
-        # COPY protocol is 10-50x faster than INSERT VALUES for large datasets.
-        # Falls back to batched execute_values if COPY is unsupported (e.g. PgBouncer transaction mode).
+        # COPY is fastest, but some hosted/pooler connections close the socket
+        # during COPY FROM STDIN. If that happens, reconnect and insert in batches.
         try:
             buf = io.StringIO()
             df.to_csv(buf, index=False, header=False)
             buf.seek(0)
             cursor.copy_expert(
-                f"COPY \"{table_name}\" ({cols_str}) FROM STDIN WITH (FORMAT CSV, NULL '')",
+                f'COPY "{table_name}" ({cols_str}) FROM STDIN WITH (FORMAT CSV, NULL \'\')',
                 buf,
             )
-        except Exception:
-            conn.rollback()
-            cursor.execute(f'CREATE TABLE "{table_name}" ({col_defs})')
-            records = [
-                tuple(None if (isinstance(v, float) and pd.isna(v)) else v for v in row)
-                for row in df.itertuples(index=False, name=None)
-            ]
-            BATCH = 5000
-            insert_sql = f'INSERT INTO "{table_name}" ({cols_str}) VALUES %s'
-            for i in range(0, len(records), BATCH):
-                psycopg2.extras.execute_values(cursor, insert_sql, records[i:i + BATCH])
+            conn.commit()
+            cursor.close()
+            _safe_close(conn)
+            return {
+                "success": True,
+                "table_name": table_name,
+                "rows": len(df),
+                "columns": list(df.columns),
+            }
+        except Exception as e:
+            copy_error = str(e)
+            _safe_rollback(conn)
+            _safe_close(conn)
 
-        conn.commit()
+        conn = _connect()
+        cursor = conn.cursor()
+        table_name = _unique_table_name(cursor, base_name)
+        _create_table(cursor, table_name, df)
         cursor.close()
-        conn.close()
-
+        _insert_values(conn, table_name, df, cols_str)
+        conn.commit()
+        _safe_close(conn)
         return {
             "success": True,
             "table_name": table_name,
             "rows": len(df),
             "columns": list(df.columns),
+            "warning": f"COPY failed; used batched insert fallback. COPY error: {copy_error}",
         }
 
     except Exception as e:
-        conn.rollback()
-        conn.close()
-        return {"success": False, "error": str(e), "table_name": base_name}
+        _safe_rollback(conn)
+        _safe_close(conn)
+        detail = str(e)
+        if copy_error:
+            detail = f"{detail} (COPY fallback was triggered after: {copy_error})"
+        return {"success": False, "error": detail, "table_name": table_name}

@@ -10,3 +10,4 @@ venv/
 MEMORY.md
 test_*.csv
 scratch/
+logs/

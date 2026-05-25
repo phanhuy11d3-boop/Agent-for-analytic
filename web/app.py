@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.requests import Request
 
-from config import SEMANTIC_PROFILE_SAMPLE_LIMIT
+from config import ANALYSIS_TIMEOUT_SECONDS, SEMANTIC_PROFILE_SAMPLE_LIMIT, SEMANTIC_PROPOSAL_USE_LLM
 from graph import stream as graph_stream
 from web.routers.upload import router as upload_router
 from tools.context_store import load_context, save_context
@@ -23,6 +23,7 @@ from tools.intent_classifier import classify_intent
 from tools.mschema_builder import build_mschema
 from tools.report_planner import analytics_from_report_spec, build_report_spec
 from tools.schema_interview import detect_semantic_gaps
+from tools.semantic_proposer import propose_semantic_context
 from tools.table_profiler import profile_from_rows, profile_table
 
 BASE_DIR    = Path(__file__).parent
@@ -90,7 +91,7 @@ async def reanalyze(request: Request):
 
 
 @app.get("/api/semantic-context")
-async def get_semantic_context(table: str, question: str = ""):
+async def get_semantic_context(table: str, question: str = "", llm: bool | None = None):
     if not table:
         raise HTTPException(status_code=400, detail="table is required")
 
@@ -102,8 +103,15 @@ async def get_semantic_context(table: str, question: str = ""):
     intent = classify_intent(question or "summarize this dataset")
     mschema = build_mschema(profile, context)
     gaps = detect_semantic_gaps(question, intent, profile, context)
+    proposal = propose_semantic_context(
+        table_profile=profile,
+        question=question or "summarize this dataset",
+        existing_context=context,
+        use_llm=SEMANTIC_PROPOSAL_USE_LLM if llm is None else llm,
+    )
     return {
         "context": context,
+        "proposal": proposal,
         "mschema": mschema,
         "gaps": gaps.get("gaps", []),
         "clarification_required": gaps.get("clarification_required", False),
@@ -161,12 +169,26 @@ async def analyze(websocket: WebSocket):
 
         worker = threading.Thread(target=_run_stream, daemon=True)
         worker.start()
+        started_at = time.monotonic()
 
         while True:
             try:
                 kind, node_name, payload = await asyncio.to_thread(step_queue.get, True, 1)
             except queue.Empty:
-                await websocket.send_json({"type": "heartbeat", "message": "Still working..."})
+                elapsed = int(time.monotonic() - started_at)
+                if elapsed >= ANALYSIS_TIMEOUT_SECONDS:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": (
+                            f"Analysis timed out after {ANALYSIS_TIMEOUT_SECONDS}s before producing a complete report. "
+                            "Please retry with a narrower question or check the server/LLM provider logs."
+                        ),
+                    })
+                    return
+                await websocket.send_json({
+                    "type": "heartbeat",
+                    "message": f"Still working... {elapsed}s",
+                })
                 continue
 
             if kind == "done":

@@ -53,10 +53,17 @@ NINEROUTER_URL = f"{NINEROUTER_BASE_URL}/chat/completions"
 QUERY_SAMPLE_LIMIT = int(os.getenv("QUERY_SAMPLE_LIMIT", "1000"))
 PROFILE_SAMPLE_LIMIT = int(os.getenv("PROFILE_SAMPLE_LIMIT", "1000"))
 SEMANTIC_PROFILE_SAMPLE_LIMIT = int(os.getenv("SEMANTIC_PROFILE_SAMPLE_LIMIT", "300"))
+SEMANTIC_PROPOSAL_USE_LLM = os.getenv("SEMANTIC_PROPOSAL_USE_LLM", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 PROFILE_TOP_N = int(os.getenv("PROFILE_TOP_N", "10"))
 PROFILE_COLUMN_LIMIT = int(os.getenv("PROFILE_COLUMN_LIMIT", "80"))
 SQL_ROW_LIMIT = QUERY_SAMPLE_LIMIT  # Backward-compatible alias for older imports.
 SQL_TIMEOUT = 30
+ANALYSIS_TIMEOUT_SECONDS = int(os.getenv("ANALYSIS_TIMEOUT_SECONDS", "180"))
 MAX_AGENT_STEPS = 10
 
 

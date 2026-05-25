@@ -3,6 +3,7 @@ import unicodedata
 from typing import Any
 
 from tools.evidence_planner import build_evidence_plan
+from tools.observation_engine import build_observations
 from tools.schema_linker import link_schema
 from tools.semantic_inference import best_role, load_taxonomy
 from tools.viz_planner import build_charts_from_evidence
@@ -244,6 +245,8 @@ def _data_scope(table_profile: dict[str, Any], raw_row_count: int) -> dict[str, 
 
 def _true_outcome_cols(table_profile: dict[str, Any], semantic_context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     context = semantic_context or {}
+    if not bool(context.get("confirmed")):
+        return []
     confirmed = str(context.get("outcome_column") or "").strip()
     if confirmed:
         matches = [
@@ -264,7 +267,7 @@ def _evidence_level(
 ) -> tuple[str, str]:
     if not table_profile.get("success", True):
         return "limited", "low"
-    if outcome_cols and (semantic_context or {}).get("outcome_column"):
+    if outcome_cols and (semantic_context or {}).get("confirmed"):
         return "validated_context", "medium"
     if intent.get("requires_validation") and not outcome_cols:
         return "proxy_based", "low"
@@ -280,6 +283,42 @@ def _summary_cards(table_profile: dict[str, Any], evidence_level: str, decision_
         {"label": "Evidence", "value": evidence_level.replace("_", " ").title(), "note": "Strength of available support"},
         {"label": "Readiness", "value": decision_readiness.title(), "note": "Use with stated limitations"},
         {"label": "Candidate Signals", "value": _fmt_int(role_counts.get("measure", 0) + role_counts.get("dimension", 0)), "note": "Usable measures and grouping fields"},
+    ]
+
+
+def _metric_report_cards(table_profile: dict[str, Any], explicit_plan: dict[str, Any]) -> list[dict[str, str]]:
+    measures = [item.get("column", "") for item in explicit_plan.get("measures", []) if item.get("column")]
+    dimensions = [item.get("column", "") for item in explicit_plan.get("dimensions", []) if item.get("column")]
+    return [
+        {"label": "Rows", "value": _fmt_int(table_profile.get("row_count")), "note": "Rows in selected table"},
+        {"label": "Metrics", "value": _fmt_int(len(measures)), "note": ", ".join(measures[:3]) or "Detected from question"},
+        {"label": "Groups", "value": _fmt_int(len(dimensions)), "note": ", ".join(dimensions[:3]) or "Detected from question"},
+        {"label": "Evidence", "value": "SQL Aggregate", "note": "Answer is based on executed grouped queries"},
+    ]
+
+
+def _evidence_report_cards(
+    table_profile: dict[str, Any],
+    evidence_results: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    real_items = [
+        item for item in evidence_results
+        if item.get("success", True) and item.get("data") and item.get("kind") not in {"candidate_scores", "missingness"}
+    ]
+    kinds = {item.get("kind") for item in real_items}
+    fields = []
+    for item in real_items:
+        for key in ("primary_dimension", "series_dimension", "metric"):
+            value = item.get(key)
+            if value and value not in fields:
+                fields.append(value)
+    evidence_label = "Distribution" if kinds == {"distribution"} else "SQL Aggregate"
+    return [
+        {"label": "Rows", "value": _fmt_int(table_profile.get("row_count")), "note": "Rows in selected table"},
+        {"label": "Evidence", "value": evidence_label, "note": "Answer is based on executed aggregate evidence"},
+        {"label": "Observations", "value": _fmt_int(len(observations)), "note": "Evidence-bound descriptive findings"},
+        {"label": "Fields", "value": _fmt_int(len(fields)), "note": ", ".join(fields[:4]) or "Detected from evidence"},
     ]
 
 
@@ -564,6 +603,71 @@ def _static_evidence_results(evidence_plan: dict[str, Any]) -> list[dict[str, An
     return results
 
 
+_PROFILE_ONLY_EVIDENCE_KINDS = {"candidate_scores", "missingness", "numeric_summary"}
+
+
+def _has_business_evidence(evidence_results: list[dict[str, Any]]) -> bool:
+    return any(
+        item.get("success", True)
+        and bool(item.get("data"))
+        and item.get("kind") not in _PROFILE_ONLY_EVIDENCE_KINDS
+        for item in evidence_results
+    )
+
+
+def _requires_business_evidence(intent: dict[str, Any], output_type: str) -> bool:
+    return output_type == "metric_dimension_report" or intent.get("intent") in {
+        "ranking",
+        "comparison",
+        "segmentation",
+        "trend",
+    }
+
+
+def _stage_trace(
+    table_profile: dict[str, Any],
+    linked_columns: list[dict[str, Any]],
+    evidence_plan: dict[str, Any],
+    evidence_results: list[dict[str, Any]],
+    output_type: str,
+    intent: dict[str, Any],
+) -> list[dict[str, str]]:
+    sql_items = [item for item in evidence_plan.get("items", []) if item.get("sql")]
+    executed_sql = [item for item in evidence_results if item.get("sql") or item.get("executed_sql")]
+    failed_sql = [item for item in executed_sql if not item.get("success", True)]
+    has_business_evidence = _has_business_evidence(evidence_results)
+    needs_business_evidence = _requires_business_evidence(intent, output_type)
+
+    trace = [
+        {
+            "stage": "schema_discovery",
+            "status": "ok" if table_profile.get("success", True) and table_profile.get("columns") else "failed",
+            "detail": "Table profile and columns are available." if table_profile.get("columns") else "No usable table profile or columns were available.",
+        },
+        {
+            "stage": "schema_linking",
+            "status": "ok" if linked_columns else "failed",
+            "detail": f"{len(linked_columns)} candidate columns linked to the question." if linked_columns else "No candidate columns linked to the question.",
+        },
+        {
+            "stage": "operator_planning",
+            "status": "ok" if sql_items else "partial",
+            "detail": f"{len(sql_items)} SQL evidence item(s) planned." if sql_items else "Only profile-level evidence was planned.",
+        },
+        {
+            "stage": "sql_execution",
+            "status": "failed" if failed_sql else "ok" if executed_sql else "not_applicable",
+            "detail": f"{len(failed_sql)} SQL evidence item(s) failed." if failed_sql else f"{len(executed_sql)} SQL evidence item(s) executed." if executed_sql else "No SQL evidence was executed.",
+        },
+        {
+            "stage": "result_validation",
+            "status": "ok" if has_business_evidence else "failed" if needs_business_evidence else "partial",
+            "detail": "Business evidence has rows and can support the report." if has_business_evidence else "No business evidence with usable rows was returned.",
+        },
+    ]
+    return trace
+
+
 def _data_context_summary(data_context: dict[str, Any] | None) -> dict[str, Any]:
     if not data_context:
         return {}
@@ -583,6 +687,30 @@ def _data_context_summary(data_context: dict[str, Any] | None) -> dict[str, Any]
     }
 
 
+def _claim_contract(
+    direct_answer: str,
+    output_type: str,
+    evidence_results: list[dict[str, Any]],
+    semantic_context: dict[str, Any] | None = None,
+    answerability: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    evidence_ids = [
+        str(item.get("id") or item.get("title") or item.get("kind"))
+        for item in evidence_results
+        if item.get("success", True) and (item.get("data") or item.get("executed_sql") or item.get("sql"))
+    ]
+    context = semantic_context or {}
+    return [{
+        "claim": direct_answer,
+        "claim_type": output_type,
+        "evidence_ids": evidence_ids[:5],
+        "semantic_source": "confirmed_semantic_layer" if context.get("confirmed") else "profile_or_unconfirmed_context",
+        "status": (answerability or {}).get("status", "answerable"),
+        "allowed": output_type not in {"cannot_answer", "semantic_confirmation"},
+        "warning": "; ".join((answerability or {}).get("warnings") or [])[:500],
+    }]
+
+
 def _direct_answer_with_evidence(
     question: str,
     intent: dict[str, Any],
@@ -590,29 +718,146 @@ def _direct_answer_with_evidence(
     ranked_cols: list[dict[str, Any]],
     evidence_results: list[dict[str, Any]],
 ) -> str:
-    for item in evidence_results:
-        if not item.get("success", True):
-            continue
+    # Process primary evidence in priority order matching viz_planner
+    PRIORITY = {
+        "trend": 0,
+        "outcome_rate_by_dimension": 1,
+        "top_n": 2,
+        "metric_by_dimension": 3,
+        "distribution": 4,
+    }
+    ordered = sorted(
+        [e for e in evidence_results if e.get("success", True) and e.get("data")],
+        key=lambda e: PRIORITY.get(e.get("kind", ""), 99),
+    )
+    validation_intents = {"definition", "driver_analysis", "feature_selection", "decision_readiness"}
+    needs_validation = bool(intent.get("requires_validation")) or intent.get("intent") in validation_intents
+    qualifier = "" if outcome_cols or not needs_validation else " This is proxy/descriptive evidence, not proof of the true business outcome."
+
+    for item in ordered:
         kind = item.get("kind")
         data = item.get("data") or []
-        if kind in {"outcome_rate_by_dimension", "metric_by_dimension", "distribution"} and data:
-            values = []
-            for row in data[:3]:
-                label = row.get("label")
-                value = row.get("value")
-                if label is not None and value is not None:
-                    values.append(f"{label} ({_fmt_value(value)})")
+        if not data:
+            continue
+
+        if kind == "trend":
+            first, last = data[0], data[-1]
+            v_first = float(first.get("value", 0) or 0)
+            v_last = float(last.get("value", 0) or 0)
+            direction = "up" if v_last >= v_first else "down"
+            # trend SQL uses "period" column; viz_planner normalises to "label"
+            _lbl = lambda r: r.get("label") or r.get("period") or "—"
+            return (
+                f"For this trend question, `{item.get('title')}` moves {direction} "
+                f"from {_lbl(first)} ({_fmt_value(first.get('value'))}) "
+                f"to {_lbl(last)} ({_fmt_value(last.get('value'))}).{qualifier}"
+            )
+
+        if kind == "top_n":
+            top = data[0]
+            rest = [r for r in data[1:3] if r.get("label") is not None]
+            others = ", ".join(f"{r.get('label')} ({_fmt_value(r.get('value'))})" for r in rest)
+            answer = (
+                f"For this ranking question, the top performer is `{top.get('label')}` "
+                f"({_fmt_value(top.get('value'))}) by `{item.get('title')}`."
+            )
+            if others:
+                answer += f" Followed by: {others}."
+            return answer + qualifier
+
+        if kind in {"outcome_rate_by_dimension", "metric_by_dimension", "distribution"}:
+            if kind == "distribution":
+                top = max(
+                    data,
+                    key=lambda row: float(row.get("value", 0) or 0),
+                )
+                return (
+                    f"The most frequent value in `{item.get('title')}` is "
+                    f"{top.get('label')} ({_fmt_value(top.get('value'))} rows)."
+                    f"{qualifier}"
+                )
+            values = [
+                f"{r.get('label')} ({_fmt_value(r.get('value'))})"
+                for r in data[:3]
+                if r.get("label") is not None and r.get("value") is not None
+            ]
             if not values:
                 continue
-            qualifier = ""
-            if not outcome_cols:
-                qualifier = " This is proxy/descriptive evidence, not proof of the true business outcome."
             return (
                 f"For this {intent.get('intent', 'analysis').replace('_', ' ')} question, "
                 f"the strongest evidence available is `{item.get('title')}`. "
                 f"Top observed groups/values are: {', '.join(values)}.{qualifier}"
             )
+
     return _direct_answer(question, intent, outcome_cols, ranked_cols)
+
+
+def _metric_dimension_narrative(evidence_results: list[dict[str, Any]]) -> tuple[str, list[str]]:
+    metric_items = [
+        item for item in evidence_results
+        if item.get("success", True)
+        and item.get("kind") in {"metric_by_two_dimensions", "metric_by_dimension", "top_n"}
+        and item.get("data")
+    ]
+    if not metric_items:
+        return (
+            "I found metric/dimension fields for this question, but no aggregate evidence was returned.",
+            ["No aggregate result was available for the requested metrics and dimensions."],
+        )
+
+    direct_parts = []
+    points: list[str] = []
+    for item in metric_items[:2]:
+        metric = item.get("metric") or item.get("title") or "metric"
+        metric_label = _column_label(metric)
+        data = item.get("data") or []
+        series_dim = item.get("series_dimension")
+        primary_dim = item.get("primary_dimension")
+
+        if item.get("kind") == "metric_by_two_dimensions" and series_dim:
+            by_series: dict[str, float] = {}
+            by_primary: dict[str, list[dict[str, Any]]] = {}
+            for row in data:
+                series = str(row.get("series"))
+                label = str(row.get("label"))
+                try:
+                    value = float(row.get("value", 0) or 0)
+                except (TypeError, ValueError):
+                    value = 0.0
+                by_series[series] = by_series.get(series, 0.0) + value
+                by_primary.setdefault(label, []).append({**row, "_value": value})
+
+            if by_series:
+                top_series, top_value = max(by_series.items(), key=lambda kv: kv[1])
+                direct_parts.append(f"Top {_column_label(series_dim)} by {metric_label} is {top_series} ({_fmt_value(top_value)}).")
+                points.append(f"Overall {metric_label}: {top_series} leads with {_fmt_value(top_value)}.")
+
+            regional_bits = []
+            for label in sorted(by_primary):
+                rows = by_primary[label]
+                top = max(rows, key=lambda row: row.get("_value", 0))
+                regional_bits.append(f"{label}: {top.get('series')} ({_fmt_value(top.get('_value'))})")
+            if regional_bits:
+                points.append(f"By {_column_label(primary_dim)} for {metric_label}: " + "; ".join(regional_bits[:6]) + ".")
+        else:
+            rows = []
+            for row in data:
+                try:
+                    rows.append({**row, "_value": float(row.get("value", 0) or 0)})
+                except (TypeError, ValueError):
+                    continue
+            if rows:
+                top = max(rows, key=lambda row: row["_value"])
+                dimension_label = _column_label(primary_dim or "group")
+                direct_parts.append(f"Top {dimension_label} by {metric_label} is {top.get('label')} ({_fmt_value(top.get('_value'))}).")
+                points.append(f"{metric_label} by {dimension_label}: {top.get('label')} ranks first with {_fmt_value(top.get('_value'))}.")
+
+    if not direct_parts:
+        direct_parts.append("The aggregate query ran, but the result did not contain a clear top group.")
+    if not points:
+        points.append("Review the result table for the requested metric/dimension breakdown.")
+    points.append("These are descriptive aggregates from the selected table, not causal or predictive claims.")
+    return " ".join(direct_parts), points[:5]
 
 
 def _executive_points(
@@ -684,6 +929,8 @@ def build_report_spec(
     table_profile: dict[str, Any],
     raw_row_count: int = 0,
     semantic_context: dict[str, Any] | None = None,
+    semantic_proposal: dict[str, Any] | None = None,
+    answerability: dict[str, Any] | None = None,
     mschema: dict[str, Any] | None = None,
     data_context: dict[str, Any] | None = None,
     linked_columns: list[dict[str, Any]] | None = None,
@@ -697,6 +944,12 @@ def build_report_spec(
     ranked_cols = _linked_to_ranked_rows(linked_columns) or _rank_columns_for_question(question, table_profile)
     evidence_level, decision_readiness = _evidence_level(intent, outcome_cols, table_profile, semantic_context)
     warnings = _warnings(intent, table_profile, outcome_cols, semantic_context)
+    answerability = answerability or {}
+    output_type = answerability.get("output_type") or "compact_report"
+    if output_type == "exploratory_profile":
+        evidence_level = "exploratory_only"
+        decision_readiness = "low"
+        warnings.extend(answerability.get("warnings") or [])
     evidence_plan = evidence_plan or build_evidence_plan(
         question=question,
         intent=intent,
@@ -705,18 +958,93 @@ def build_report_spec(
         linked_columns=linked_columns,
     )
     evidence_results = evidence_results if evidence_results is not None else _static_evidence_results(evidence_plan)
+    observations = build_observations(evidence_results, table_profile=table_profile)
+    observation_points = [item.get("claim", "") for item in observations if item.get("claim")]
+    has_real_evidence = _has_business_evidence(evidence_results)
+    failure_trace = _stage_trace(
+        table_profile=table_profile,
+        linked_columns=linked_columns,
+        evidence_plan=evidence_plan,
+        evidence_results=evidence_results,
+        output_type=output_type,
+        intent=intent,
+    )
+    if output_type == "metric_dimension_report" and not has_real_evidence:
+        output_type = "direct_answer"
+        warnings.append(
+            "No executed aggregate evidence returned a usable result shape, so the metric report was blocked."
+        )
+        answerability = {
+            **answerability,
+            "output_type": "direct_answer",
+            "status": "aggregate_evidence_missing",
+            "suggested_answer": (
+                "I found fields for this analytical question, but the executed aggregate evidence did not return "
+                "usable rows. I will not generate a metric dashboard without valid evidence."
+            ),
+        }
+        failure_trace = _stage_trace(
+            table_profile=table_profile,
+            linked_columns=linked_columns,
+            evidence_plan=evidence_plan,
+            evidence_results=evidence_results,
+            output_type=output_type,
+            intent=intent,
+        )
     candidate_cards = _candidate_cards(ranked_cols)
     executive_points = _executive_points(intent, outcome_cols, ranked_cols, warnings)
-    slicers: list[dict[str, Any]] = []
+    slicers = _smart_slicers(table_profile, question, limit=2)
     charts = build_charts_from_evidence(evidence_results)
-    if not charts:
+    if not charts and output_type != "exploratory_profile":
         charts = _dashboard_charts(table_profile, question, ranked_cols, slicers)
+    if output_type == "exploratory_profile" and not charts:
+        slicers = []
+
+    direct_answer = _direct_answer_with_evidence(question, intent, outcome_cols, ranked_cols, evidence_results)
+    metric_points: list[str] = []
+    if output_type == "metric_dimension_report":
+        direct_answer, metric_points = _metric_dimension_narrative(evidence_results)
+        candidate_cards = []
+        executive_points = (observation_points[:6] if observation_points else metric_points)
+        slicers = []
+        warnings.extend(answerability.get("warnings") or [])
+    elif observation_points and has_real_evidence:
+        executive_points = observation_points[:6]
+        candidate_cards = []
+        slicers = []
+    if output_type == "exploratory_profile" and answerability.get("suggested_answer"):
+        direct_answer = f"{answerability['suggested_answer']} {direct_answer}"
+    if output_type == "direct_answer":
+        if answerability.get("suggested_answer"):
+            direct_answer = answerability["suggested_answer"]
+        charts = []
+        slicers = []
+        candidate_cards = []
+        executive_points = [
+            answerability.get("reason") or "The question can be answered as a narrow direct answer.",
+            *(answerability.get("warnings") or warnings)[:3],
+            "Ask a follow-up with a confirmed primary metric or outcome for a fuller report.",
+        ][:5]
+    claim_contract = _claim_contract(
+        direct_answer=direct_answer,
+        output_type=output_type,
+        evidence_results=evidence_results,
+        semantic_context=semantic_context,
+        answerability=answerability,
+    )
+    summary_cards = (
+        _metric_report_cards(table_profile, answerability.get("explicit_aggregate_plan") or {})
+        if output_type == "metric_dimension_report"
+        else _evidence_report_cards(table_profile, evidence_results, observations)
+        if observation_points and has_real_evidence
+        else _summary_cards(table_profile, evidence_level, decision_readiness)
+    )
 
     sections = [
         {
             "title": "Direct Answer",
             "kind": "paragraph",
-            "content": _direct_answer_with_evidence(question, intent, outcome_cols, ranked_cols, evidence_results),
+            "content": direct_answer,
         },
         {
             "title": "Question-Aware Candidate Columns",
@@ -752,19 +1080,26 @@ def build_report_spec(
 
     return {
         "version": "generic-report-spec-v4",
+        "output_type": output_type,
         "question": question,
         "intent": intent,
         "data_scope": _data_scope(table_profile, raw_row_count),
         "data_context": _data_context_summary(data_context),
         "evidence_level": evidence_level,
         "decision_readiness": decision_readiness,
-        "warnings": warnings,
+        "warnings": list(dict.fromkeys(warnings)),
         "semantic_context": semantic_context or {},
+        "semantic_proposal": semantic_proposal or {},
+        "answerability": answerability,
+        "explicit_aggregate_plan": answerability.get("explicit_aggregate_plan") or {},
         "mschema": mschema or {},
         "linked_columns": linked_columns,
         "evidence_plan": evidence_plan,
         "evidence_results": evidence_results,
-        "summary_cards": _summary_cards(table_profile, evidence_level, decision_readiness),
+        "failure_trace": failure_trace,
+        "observations": observations,
+        "claim_contract": claim_contract,
+        "summary_cards": summary_cards,
         "executive_points": executive_points,
         "candidate_signals": candidate_cards,
         "slicers": slicers,

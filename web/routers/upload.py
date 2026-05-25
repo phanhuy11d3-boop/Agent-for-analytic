@@ -48,7 +48,10 @@ async def upload_dataset(file: UploadFile = File(...)):
     if len(df.columns) > 200:
         raise HTTPException(422, "File has too many columns (max 200)")
 
-    result = await run_in_threadpool(upload_dataframe, df, file.filename or "upload")
+    try:
+        result = await run_in_threadpool(upload_dataframe, df, file.filename or "upload")
+    except Exception as e:
+        raise HTTPException(500, f"Database error: {e}")
     if not result["success"]:
         raise HTTPException(500, f"Database error: {result['error']}")
 

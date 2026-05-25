@@ -61,6 +61,8 @@ def default_context(table_name: str | None = None) -> dict[str, Any]:
         "negative_outcome_value": "",
         "column_descriptions": {},
         "confirmed": False,
+        "confirmation_source": "",
+        "confirmed_fields": [],
     }
 
 
@@ -87,19 +89,42 @@ def load_context(table_name: str | None, table_profile: dict[str, Any]) -> dict[
     context.update(item.get("context") or {})
     context["table_name"] = table_name
     context["schema_fingerprint"] = expected
+    if context.get("confirmed") and not context.get("confirmed_fields") and not context.get("confirmation_source"):
+        context["confirmed"] = False
     return context
 
 
 def save_context(table_name: str, table_profile: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    incoming = context or {}
+    existing = load_context(table_name, table_profile)
     clean = default_context(table_name)
     clean.update({
-        key: value for key, value in (context or {}).items()
+        key: value for key, value in incoming.items()
         if key in clean
     })
     clean["table_name"] = table_name
-    clean["confirmed"] = bool(clean.get("confirmed") or any(
-        clean.get(key) for key in ("table_purpose", "row_grain", "primary_metric", "outcome_column")
-    ))
+    explicit_confirmation = "confirmed" in incoming
+    requested_confirmation = str(incoming.get("confirmed", "")).strip().lower() in {"1", "true", "yes", "y"}
+    confirmable_fields = [
+        key for key in (
+            "table_purpose",
+            "row_grain",
+            "primary_metric",
+            "outcome_column",
+            "positive_outcome_value",
+            "negative_outcome_value",
+        )
+        if str(clean.get(key) or "").strip()
+    ]
+    if explicit_confirmation:
+        clean["confirmed"] = bool(requested_confirmation and confirmable_fields)
+    else:
+        clean["confirmed"] = bool(existing.get("confirmed") and confirmable_fields)
+    clean["confirmed_fields"] = confirmable_fields if clean["confirmed"] else []
+    clean["confirmation_source"] = (
+        str(incoming.get("confirmation_source") or "").strip()
+        or "user"
+    ) if clean["confirmed"] else ""
 
     fingerprint = schema_fingerprint(table_profile)
     store = _load_store()

@@ -123,6 +123,8 @@ const semanticOutcome = document.getElementById("semantic-outcome");
 const semanticPositive = document.getElementById("semantic-positive");
 const semanticMetric = document.getElementById("semantic-metric");
 const semanticColumns = document.getElementById("semantic-columns");
+const semanticProposal = document.getElementById("semantic-proposal");
+const btnApplySemanticProposal = document.getElementById("btn-apply-semantic-proposal");
 const homeView = document.getElementById("home-view");
 const reportView = document.getElementById("report-view");
 const workspacePanel = document.getElementById("workspace-panel");
@@ -149,6 +151,7 @@ let isLoadingTables = false;
 let isAnalyzing = false;
 let isLoadingSemantic = false;
 let semanticEditVersion = 0;
+let currentProposal = null;
 
 const semanticFields = [
   semanticPurpose,
@@ -204,6 +207,7 @@ function updateUIState() {
   if (btnRefresh) btnRefresh.disabled = disabled;
   if (btnSaveSemantic) btnSaveSemantic.disabled = disabled || !datasetSelect.value;
   if (btnSaveSemanticBottom) btnSaveSemanticBottom.disabled = disabled || !datasetSelect.value;
+  if (btnApplySemanticProposal) btnApplySemanticProposal.disabled = disabled || !currentProposal;
   
   document.querySelectorAll(".suggestion-chip").forEach(chip => {
     chip.disabled = disabled;
@@ -323,13 +327,101 @@ function currentSemanticContext() {
     outcome_column: semanticOutcome ? semanticOutcome.value.trim() : "",
     positive_outcome_value: semanticPositive ? semanticPositive.value.trim() : "",
     primary_metric: semanticMetric ? semanticMetric.value.trim() : "",
+    confirmed: true,
+    confirmation_source: "user",
   };
+}
+
+function clearSemanticProposal() {
+  currentProposal = null;
+  if (semanticProposal) {
+    semanticProposal.hidden = true;
+    semanticProposal.replaceChildren();
+  }
+  if (btnApplySemanticProposal) btnApplySemanticProposal.hidden = true;
+}
+
+function addProposalRow(root, label, value, confidence) {
+  if (!value) return;
+  const row = document.createElement("div");
+  row.className = "proposal-row";
+  const labelEl = document.createElement("div");
+  labelEl.className = "proposal-label";
+  labelEl.textContent = label;
+  const valueEl = document.createElement("div");
+  valueEl.className = "proposal-value";
+  valueEl.textContent = value;
+  const confidenceEl = document.createElement("div");
+  confidenceEl.className = "proposal-confidence";
+  confidenceEl.textContent = confidence !== undefined && confidence !== null
+    ? `Confidence ${confidence}`
+    : "Needs confirmation";
+  row.append(labelEl, valueEl, confidenceEl);
+  root.appendChild(row);
+}
+
+function renderSemanticProposal(proposal) {
+  clearSemanticProposal();
+  const context = proposal && proposal.context;
+  if (!semanticProposal || !context) return;
+  const confidence = proposal.confidence || {};
+  addProposalRow(semanticProposal, "Table purpose", context.table_purpose, confidence.table_purpose);
+  addProposalRow(semanticProposal, "Row grain", context.row_grain, confidence.row_grain);
+  addProposalRow(semanticProposal, "Outcome column", context.outcome_column, confidence.outcome_column);
+  addProposalRow(semanticProposal, "Positive outcome value", context.positive_outcome_value, confidence.positive_outcome_value);
+  addProposalRow(semanticProposal, "Primary metric", context.primary_metric, confidence.primary_metric);
+  if (!semanticProposal.children.length) return;
+  currentProposal = proposal;
+  semanticProposal.hidden = false;
+  if (btnApplySemanticProposal) btnApplySemanticProposal.hidden = false;
+}
+
+async function applySemanticProposal() {
+  const context = currentProposal && currentProposal.context;
+  if (!context || !datasetSelect || !datasetSelect.value) return;
+  const payload = {
+    table_purpose: context.table_purpose || "",
+    row_grain: context.row_grain || "",
+    outcome_column: context.outcome_column || "",
+    positive_outcome_value: context.positive_outcome_value || "",
+    negative_outcome_value: context.negative_outcome_value || "",
+    primary_metric: context.primary_metric || "",
+    column_descriptions: context.column_descriptions || {},
+    confirmed: true,
+    confirmation_source: "proposal_confirm_button",
+  };
+  isLoadingSemantic = true;
+  updateUIState();
+  setSemanticStatus("Confirming semantic context...", "");
+  try {
+    const resp = await fetch("/api/semantic-context", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        table_name: datasetSelect.value,
+        context: payload,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "Could not confirm semantic context");
+    fillSemanticForm(data.context || {});
+    fillSemanticColumns(data.mschema || {});
+    clearSemanticProposal();
+    semanticEditVersion += 1;
+    setSemanticStatus("Semantic layer confirmed. Run Analyze again for grounded output.", "ready");
+  } catch (err) {
+    setSemanticStatus("Confirm failed: " + err.message, "needs-context");
+  } finally {
+    isLoadingSemantic = false;
+    updateUIState();
+  }
 }
 
 async function loadSemanticContext() {
   if (!datasetSelect || !datasetSelect.value) {
     fillSemanticForm({});
     fillSemanticColumns({});
+    clearSemanticProposal();
     semanticEditVersion += 1;
     setSemanticStatus("Select a table to load semantic context.", "");
     updateUIState();
@@ -345,6 +437,7 @@ async function loadSemanticContext() {
     const params = new URLSearchParams({
       table: datasetSelect.value,
       question: textarea ? textarea.value.trim() : "",
+      llm: "true",
     });
     const resp = await fetch(`/api/semantic-context?${params.toString()}`);
     const data = await resp.json();
@@ -353,13 +446,15 @@ async function loadSemanticContext() {
       fillSemanticForm(data.context || {});
     }
     fillSemanticColumns(data.mschema || {});
+    renderSemanticProposal(data.proposal || null);
     const required = (data.gaps || []).filter(g => g.required).length;
     if (required) {
-      setSemanticStatus(`${required} required context field(s) missing. Reports for decision questions will stop and ask first.`, "needs-context");
+      setSemanticStatus(`${required} required context field(s) missing. Review the suggestions, then save to confirm.`, "needs-context");
     } else {
       setSemanticStatus("Semantic context is sufficient for the current question.", "ready");
     }
   } catch (err) {
+    clearSemanticProposal();
     setSemanticStatus("Semantic context unavailable: " + err.message, "needs-context");
   } finally {
     isLoadingSemantic = false;
@@ -405,6 +500,7 @@ function analyze() {
   resetAgents();
 
   const ws = new WebSocket(`ws://${location.host}/ws/analyze`);
+  let analysisFinished = false;
 
   ws.onopen = () => {
     const selectedTable = datasetSelect ? (datasetSelect.value || null) : null;
@@ -412,10 +508,23 @@ function analyze() {
   };
 
   ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch (err) {
+      analysisFinished = true;
+      isAnalyzing = false;
+      updateUIState();
+      setPlaceholderMessage("Error: server sent an unreadable response.");
+      return;
+    }
 
     if (msg.type === "start") {
       placeholder.querySelector("p").textContent = "Agents are working…";
+    }
+
+    if (msg.type === "heartbeat" && msg.message) {
+      setPlaceholderMessage(msg.message);
     }
 
     if (msg.type === "step") {
@@ -435,6 +544,7 @@ function analyze() {
     }
 
     if (msg.type === "complete") {
+      analysisFinished = true;
       isAnalyzing = false;
       updateUIState();
 
@@ -454,6 +564,7 @@ function analyze() {
     }
 
     if (msg.type === "error") {
+      analysisFinished = true;
       isAnalyzing = false;
       updateUIState();
       setPlaceholderMessage("Error: " + msg.message);
@@ -461,9 +572,17 @@ function analyze() {
   };
 
   ws.onerror = () => {
+    analysisFinished = true;
     isAnalyzing = false;
     updateUIState();
     placeholder.querySelector("p").textContent = "Connection error — is the server running?";
+  };
+  ws.onclose = () => {
+    if (!analysisFinished && isAnalyzing) {
+      isAnalyzing = false;
+      updateUIState();
+      setPlaceholderMessage("Analysis connection closed before completion. Please retry.");
+    }
   };
 }
 
@@ -600,7 +719,10 @@ async function handleUpload(file) {
     });
     clearTimeout(timeoutId);
     clearInterval(timerInterval);
-    const data = await resp.json();
+    const contentType = resp.headers.get("content-type") || "";
+    const data = contentType.includes("application/json")
+      ? await resp.json()
+      : { detail: await resp.text() };
     if (!resp.ok) throw new Error(data.detail || "Upload failed");
     uploadStatus.className = "upload-status success";
     uploadStatus.textContent = data.message;
@@ -657,6 +779,7 @@ if (btnRefresh) btnRefresh.addEventListener("click", loadTables);
 if (datasetSelect) datasetSelect.addEventListener("change", loadSemanticContext);
 if (btnSaveSemantic) btnSaveSemantic.addEventListener("click", saveSemanticContext);
 if (btnSaveSemanticBottom) btnSaveSemanticBottom.addEventListener("click", saveSemanticContext);
+if (btnApplySemanticProposal) btnApplySemanticProposal.addEventListener("click", applySemanticProposal);
 semanticFields.forEach(field => {
   field.addEventListener("input", () => {
     semanticEditVersion += 1;
