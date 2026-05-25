@@ -53,22 +53,26 @@ Agent-Analytic/
 │   ├── analytics_agent.py   # raw_data → stats + chi-square + ANOVA → KPIs + insights
 │   ├── critic_agent.py      # QA review → approve or request more data (max 2 rounds)
 │   └── writer_agent.py      # analytics + raw_data → HTML report
-├── tools/
-│   ├── sql_executor.py      # execute_sql() — read-only, blocks DDL
-│   ├── schema_provider.py   # get_schema() — dynamic, cached, invalidatable
-│   ├── dataset_uploader.py  # upload_dataframe() — creates ds_ tables
+ ├── tools/
+│   ├── answerability.py      # evaluate semantic answerability of natural language questions
 │   ├── context_store.py     # load/save semantic contexts in semantic_contexts.json
 │   ├── data_context.py      # build compact data context and prune for LLM token budget
+│   ├── dataset_uploader.py  # upload_dataframe() — creates ds_ tables
 │   ├── evidence_planner.py  # plan evidence requirements based on query and intent
 │   ├── intent_classifier.py # classify user question intent (descriptive, correlation, etc.)
+│   ├── metric_dimension_planner.py # build explicit aggregation plans matching explicit metric and dimensions
 │   ├── mschema_builder.py   # build metadata schema combining profile and semantic context
+│   ├── observation_engine.py # extract and format structured observations/claims from raw evidence
 │   ├── query_builder.py     # help generate or structure SQL queries
 │   ├── report_planner.py    # plan reports and convert report specs to analysis metadata
 │   ├── report_quality.py    # analyze quality issues in generated report or data context
 │   ├── schema_interview.py  # detect semantic gaps and request context/interviews
 │   ├── schema_linker.py     # link semantic concepts to physical columns
+│   ├── schema_provider.py   # get_schema() — dynamic, cached, invalidatable
 │   ├── semantic_inference.py# infer semantics, roles, or relationships from column metadata
 │   ├── semantic_layer.py    # construct a semantic layer definition for the table
+│   ├── semantic_proposer.py # propose semantic context (purpose, grain, outcomes) based on table profiles
+│   ├── sql_executor.py      # execute_sql() — read-only, blocks DDL
 │   ├── table_profiler.py    # profile database tables or raw rows to detect types and top values
 │   └── viz_planner.py       # plan visualizations based on report spec and data
 ├── web/

@@ -17,21 +17,25 @@ config.py                  → load .env, DB/LLM constants, invoke_groq/invoke_n
 state.py                   → AgentState TypedDict (shared across all agents)
 graph.py                   → LangGraph graph: semantic→data→analytics→critic→writer, loops/routing
 html_report.py             → HTML report builder (generate_report + helpers)
-tools/sql_executor.py      → execute_sql(query) → {success, data, columns, row_count}
-tools/schema_provider.py   → get_schema/get_schema_for_table/get_columns_for_table (cached, invalidatable)
-tools/dataset_uploader.py  → upload_dataframe() → creates ds_* tables in DB
+tools/answerability.py     → evaluate semantic answerability of natural language questions
 tools/context_store.py     → load/save semantic contexts (metadata) in semantic_contexts.json
 tools/data_context.py      → build compact data context and prune for LLM token budget
+tools/dataset_uploader.py  → upload_dataframe() → creates ds_ tables in DB
 tools/evidence_planner.py  → plan the evidence requirements based on user query and intent
 tools/intent_classifier.py → classify user question intent (descriptive, correlation, etc.)
+tools/metric_dimension_planner.py → build explicit aggregation plans matching explicit metric and dimensions
 tools/mschema_builder.py   → build metadata schema combining table profile and semantic context
+tools/observation_engine.py → extract and format structured observations/claims from raw evidence results
 tools/query_builder.py     → help generate or structure SQL queries
 tools/report_planner.py    → plan reports and convert report specifications into analysis metadata
 tools/report_quality.py    → analyze quality issues in generated report or data context
 tools/schema_interview.py  → detect semantic gaps and request context/interviews
-tools/schema_linker.py     │ link semantic concepts to physical columns
-tools/semantic_inference.py│ infer semantics, roles, or relationships from column metadata
+tools/schema_linker.py     → link semantic concepts to physical columns
+tools/schema_provider.py   → get_schema/get_schema_for_table/get_columns_for_table (cached, invalidatable)
+tools/semantic_inference.py → infer semantics, roles, or relationships from column metadata
 tools/semantic_layer.py    → construct a semantic layer definition for the table
+tools/semantic_proposer.py → propose semantic context (purpose, grain, outcomes) based on table profiles and LLM
+tools/sql_executor.py      → execute_sql(query) → {success, data, columns, row_count}
 tools/table_profiler.py    → profile database tables or raw rows to detect data types, top values
 tools/viz_planner.py       → plan visualizations based on report spec and data
 agents/semantic_agent.py   → profile table, classify intent, check semantic gaps, request clarification
@@ -74,7 +78,7 @@ semantic_agent ─── (clarification_required = False) ──▶ data_agent �
 - After `critic_agent`: if `critic_feedback` and `critic_rounds <= MAX_CRITIC_ROUNDS` → loop back to `data_agent`.
 
 ## LangGraph State Keys
-`question`, `selected_table`, `sql_query`, `raw_data`, `columns`, `data_error`, `analytics`, `table_profile`, `data_context`, `llm_data_context`, `intent`, `report_spec`, `linked_columns`, `evidence_plan`, `evidence_results`, `semantic_context`, `mschema`, `semantic_layer`, `semantic_gaps`, `clarification_required`, `evidence_level`, `warnings`, `quality_issues`, `row_count_total`, `report_path`, `report_filename`, `steps`, `final_answer`, `critic_feedback`, `critic_rounds`
+`question`, `selected_table`, `sql_query`, `raw_data`, `columns`, `data_error`, `analytics`, `table_profile`, `data_context`, `llm_data_context`, `intent`, `report_spec`, `linked_columns`, `explicit_aggregate_plan`, `evidence_plan`, `evidence_results`, `semantic_context`, `semantic_proposal`, `mschema`, `semantic_layer`, `semantic_gaps`, `answerability`, `output_type`, `clarification_required`, `evidence_level`, `warnings`, `quality_issues`, `row_count_total`, `report_path`, `report_filename`, `steps`, `final_answer`, `critic_feedback`, `critic_rounds`
 
 ## Key Constraints
 - `sql_executor` blocks INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER/CREATE
