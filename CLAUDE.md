@@ -96,6 +96,8 @@ semantic_agent ─── (clarification_required = False) ──▶ data_agent �
 | `POST` | `/api/upload` | Upload CSV/Excel → creates `ds_` table |
 | `GET` | `/api/tables` | List all tables with row counts |
 | `DELETE` | `/api/tables/{name}` | Delete uploaded (`ds_`) table |
+| `GET` | `/api/semantic-context` | Get semantic context, gaps, and LLM proposal for a table |
+| `POST` | `/api/semantic-context` | Save/update semantic context metadata for a table |
 | `POST` | `/api/reanalyze` | Re-run analytics on provided rows without re-querying DB |
 
 ## Common Commands

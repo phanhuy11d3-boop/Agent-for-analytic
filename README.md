@@ -166,6 +166,8 @@ WS  ws://localhost:8000/ws/analyze
 POST /api/upload              # Upload CSV/Excel
 GET  /api/tables              # List tables with row counts
 DELETE /api/tables/{name}     # Delete uploaded table (ds_ prefix only)
+GET  /api/semantic-context     # Get semantic context, gaps, and LLM proposal for a table
+POST /api/semantic-context     # Save/update semantic context metadata for a table
 POST /api/reanalyze           # Re-run analytics on provided rows
 ```
 
