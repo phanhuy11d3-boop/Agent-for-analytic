@@ -38,9 +38,9 @@ tools/semantic_proposer.py → propose semantic context (purpose, grain, outcome
 tools/sql_executor.py      → execute_sql(query) → {success, data, columns, row_count}
 tools/table_profiler.py    → profile database tables or raw rows to detect data types, top values
 tools/viz_planner.py       → plan visualizations based on report spec and data
-agents/semantic_agent.py   → profile table, classify intent, check semantic gaps, request clarification
-agents/data_agent.py       → question → SQL → execute → raw_data (1 auto-retry on SQL error)
-agents/analytics_agent.py  → raw_data → stats+chi-square+ANOVA+correlations → KPIs+insights (JSON)
+agents/semantic_agent.py   → profile table, classify intent, propose semantic context, evaluate answerability, link columns, plan aggregations — gate clarification
+agents/data_agent.py       → run preview query (SELECT * with sample limit) → raw_data
+agents/analytics_agent.py  → build evidence plan → execute deterministic SQL queries → build report_spec → LLM → KPIs+insights (JSON)
 agents/critic_agent.py     → reviews analytics, may send feedback back to data_agent (max 2 rounds)
 agents/writer_agent.py     → data+insights → html_report.generate_report()
 web/app.py                 → FastAPI: GET /, WS /ws/analyze, GET /reports/{file}, POST /api/reanalyze
@@ -57,23 +57,23 @@ web/static/                → index.html, style.css, app.js (WebSocket client)
 | `openrouter` | `OPENROUTER_API_KEY`, `OPENROUTER_MODELS`, `OPENROUTER_TIMEOUT` | Fallback list of models |
 | `groq` | `GROQ_API_KEYS`, `GROQ_MODEL` | Rate-limit retry across keys |
 
-## Default Dataset — `retail_fraud_transactions` (100k rows)
-> Schema này chỉ là dataset mẫu mặc định. System hỗ trợ bất kỳ bảng nào — schema được đọc động từ DB lúc runtime.
+## Dataset Support
+> System hỗ trợ **bất kỳ bảng dữ liệu nào** — schema được đọc động từ `information_schema` lúc runtime. Không có bảng nào được giả định trước.
 
-Key columns: `transaction_id, customer_id, transaction_timestamp, transaction_amount, payment_method` ('Credit Card','Debit Card','PayPal','Google Pay','Apple Pay'), `device_type` ('Mobile','Tablet','Desktop'), `location` ('USA','UK','India','Canada','Australia','Germany'), `merchant_category` ('Fashion','Electronics','Gaming','Travel','Luxury','Groceries'), `fraud_flag` (0/1 — target), `fraud_risk` ('Low','Medium','High')
-
-Uploaded tables use `ds_` prefix and are auto-detected by `schema_provider` (fully dynamic via `information_schema`).
+- Bảng có sẵn trong DB: truy vấn trực tiếp qua schema provider
+- Bảng upload: dùng prefix `ds_` (CSV/Excel, tối đa 50 MB, 200 cột), tự động xuất hiện sau khi gọi `invalidate_schema_cache()`
+- Mọi column name, kiểu dữ liệu, top values đều được detect tự động bởi `table_profiler` và `schema_provider`
 
 ## LangGraph Pipeline
 ```
-               ┌─────── (clarification_required = True) ───────┐
-               ▼                                               │
-semantic_agent ─── (clarification_required = False) ──▶ data_agent ──▶ analytics_agent ──▶ critic_agent ─(approve)─▶ writer_agent ──▶ END
-                                                           ▲                                  │
-                                                           └─────── (needs_more_data, ────────┘
-                                                                    max 2 rounds)
+semantic_agent ─(clarification_required=False)──▶ data_agent ──▶ analytics_agent ──▶ critic_agent ─(approve)──▶ writer_agent ──▶ END
+     │                                                │                                    │
+     │ (clarification_required=True)           (error / no rows)              (needs_more_data, ≤2 rounds)
+     ▼                                               ▼                                    │
+writer_agent ──▶ END                               END             ◀────────────────────────┘
+                                                              (loop back to data_agent)
 ```
-- After `semantic_agent`: if `clarification_required` is true, goes straight to `writer_agent` to present the schema interview/gaps.
+- After `semantic_agent`: if `clarification_required=True` → thẳng đến `writer_agent` để trình bày schema gaps.
 - After `data_agent`: if `data_error` or no rows → END.
 - After `critic_agent`: if `critic_feedback` and `critic_rounds <= MAX_CRITIC_ROUNDS` → loop back to `data_agent`.
 
@@ -82,8 +82,10 @@ semantic_agent ─── (clarification_required = False) ──▶ data_agent �
 
 ## Key Constraints
 - `sql_executor` blocks INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER/CREATE
-- Auto-injects `LIMIT 1000` if query has none
-- Analytics agent computes aggregated stats (not raw rows) before sending to LLM — includes chi-square, ANOVA, Pearson correlations
+- Auto-injects `LIMIT {QUERY_SAMPLE_LIMIT}` (default 1000) if query has none; query timeout 30s
+- `data_agent` runs a preview query (`SELECT *` bounded by sample limit), không sinh SQL từ question
+- `analytics_agent` chạy `evidence_planner` (deterministic SQL aggregations) trước khi gửi LLM — LLM chỉ nhận report_spec đã tổng hợp, không nhận raw rows
+- `SEMANTIC_PROPOSAL_USE_LLM=1` (default) → semantic_agent gọi LLM để propose context; set `0` để skip LLM ở bước này
 - Reports saved to `reports/report_{YYYYMMDD_HHMMSS}.html`
 - Uploads: max 50 MB, max 200 columns, stored as `ds_{sanitized_name}` tables; call `invalidate_schema_cache()` after
 

@@ -51,22 +51,38 @@ def validate_report_spec(report_spec: dict[str, Any]) -> list[dict[str, Any]]:
             "code": "missing_evidence_results",
             "message": "Report has no explicit evidence results attached.",
         })
-    profile_only_evidence_kinds = {"candidate_scores", "missingness", "numeric_summary"}
+    profile_only_evidence_kinds = {"candidate_scores", "missingness", "numeric_summary", "count_fallback"}
+    sql_items = [item for item in evidence_results if item.get("executed_sql") or item.get("sql")]
     has_real_evidence = any(
         item.get("success", True)
         and item.get("data")
         and item.get("kind") not in profile_only_evidence_kinds
         for item in evidence_results
     )
-    if report_spec.get("output_type") == "metric_dimension_report" and not has_real_evidence:
+    aggregate_intents = {"ranking", "trend", "comparison", "driver_analysis", "segmentation", "anomaly"}
+    raw_intent = report_spec.get("intent") or {}
+    intent_name = raw_intent.get("intent", "") if isinstance(raw_intent, dict) else str(raw_intent)
+    needs_evidence = (
+        report_spec.get("output_type") == "metric_dimension_report"
+        or intent_name in aggregate_intents
+    )
+    if needs_evidence and sql_items and not has_real_evidence:
         issues.append({
             "severity": "blocker",
             "code": "missing_business_evidence",
-            "message": "Metric/dimension reports require executed aggregate evidence, not profile-only fallback data.",
+            "message": f"Intent '{intent_name}' requires aggregate evidence — all SQL queries returned empty or failed.",
         })
 
-    for chart in report_spec.get("charts") or []:
-        if not chart.get("data"):
+    charts = report_spec.get("charts") or []
+    empty_charts = [c for c in charts if not c.get("data")]
+    if charts and len(empty_charts) == len(charts):
+        issues.append({
+            "severity": "blocker",
+            "code": "empty_chart_data",
+            "message": "All charts have no data — evidence queries did not produce chartable results.",
+        })
+    else:
+        for chart in empty_charts:
             issues.append({
                 "severity": "warning",
                 "code": "empty_chart_data",

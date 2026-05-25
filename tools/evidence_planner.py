@@ -3,6 +3,7 @@ import unicodedata
 from typing import Any
 
 from tools.query_builder import (
+    build_count_by_dimension_query,
     build_distribution_query,
     build_metric_by_dimension_query,
     build_metric_by_two_dimensions_query,
@@ -14,6 +15,7 @@ from tools.query_builder import (
     build_top_n_query,
     build_trend_query,
 )
+from tools.schema_provider import get_columns_for_table
 from tools.sql_executor import execute_aggregate_sql
 
 
@@ -81,14 +83,7 @@ def _safe_measure(col: dict[str, Any] | None, confirmed_metric: bool = False) ->
         return False
     if confirmed_metric:
         return True
-    if _direct_link_score(col) >= 0.12:
-        return True
-    metric_concepts = {"revenue", "profit"}
-    return (
-        col.get("role") == "measure"
-        and bool(_concept_names(col) & metric_concepts)
-        and float(col.get("concept_score", 0) or 0) >= 0.6
-    )
+    return _direct_link_score(col) >= 0.12
 
 
 def _safe_dimension(col: dict[str, Any] | None) -> bool:
@@ -443,6 +438,7 @@ def build_evidence_plan(
             "version": "evidence-plan-v2",
             "question": question,
             "intent": intent.get("intent"),
+            "table_name": None,
             "items": items,
             "warnings": ["Only static profile evidence is available — no table selected."],
         }
@@ -456,6 +452,34 @@ def build_evidence_plan(
         sql_items: list[dict[str, Any]] = []
         primary_dim = dims[0] if dims else None
         series_dim = dims[1] if len(dims) > 1 else None
+        if aggregation == "count" and primary_dim:
+            sql = build_count_by_dimension_query(
+                table_name,
+                primary_dim["column"],
+                filters=filters,
+            )
+            sql_items.append({
+                "id": f"count_rows_by_{primary_dim['column']}",
+                "kind": "metric_by_dimension",
+                "title": f"Count Rows by {_fmt_label(primary_dim['column'])}{filter_suffix}",
+                "description": "Grouped row count answering the requested ranking.",
+                "sql": sql,
+                "unit": "rows",
+                "metric": "rows",
+                "aggregation": "count",
+                "primary_dimension": primary_dim.get("column"),
+                "series_dimension": "",
+                "filters": filters,
+            })
+            return {
+                "version": "evidence-plan-v3",
+                "question": question,
+                "intent": intent.get("intent"),
+                "table_name": table_name,
+                "explicit_aggregate_plan": explicit_plan,
+                "items": sql_items[:max_sql_items],
+                "warnings": [],
+            }
         for measure in measures[:2]:
             metric = measure.get("column")
             if not metric or not primary_dim:
@@ -500,6 +524,7 @@ def build_evidence_plan(
             "version": "evidence-plan-v3",
             "question": question,
             "intent": intent.get("intent"),
+            "table_name": table_name,
             "explicit_aggregate_plan": explicit_plan,
             "items": sql_items[:max_sql_items],
             "warnings": [],
@@ -511,6 +536,7 @@ def build_evidence_plan(
             "version": "evidence-plan-v3",
             "question": question,
             "intent": intent.get("intent"),
+            "table_name": table_name,
             "items": [_build_distribution_item(table_name, distribution_column, numeric_distribution)],
             "warnings": [],
         }
@@ -524,6 +550,23 @@ def build_evidence_plan(
         measure = {"column": confirmed_metric, "role": "measure", "score": 1.0}
     outcome = context.get("outcome_column")
     positive = context.get("positive_outcome_value")
+
+    # TRUST-SQL: verify resolved columns actually exist in schema before building SQL
+    warnings: list[str] = []
+    actual_cols = set(get_columns_for_table(table_name) or [])
+    if actual_cols:
+        if measure and measure.get("column") not in actual_cols:
+            warnings.append(
+                f"Linked measure column '{measure['column']}' not found in '{table_name}' schema — skipped."
+            )
+            measure = None
+        if dimension and dimension.get("column") not in actual_cols:
+            warnings.append(
+                f"Linked dimension column '{dimension['column']}' not found in '{table_name}' schema — skipped."
+            )
+            dimension = None
+        if date_col and date_col.get("column") not in actual_cols:
+            date_col = None
 
     intent_name = intent.get("intent", "segmentation")
     sql_items: list[dict[str, Any]] = []
@@ -605,8 +648,18 @@ def build_evidence_plan(
                 "unit": "value",
             })
 
+    # Enrich v2 items with resolved column metadata so _rebuild_simplified_sql can use them
+    for _item in sql_items:
+        item_kind = _item.get("kind", "")
+        # trend items use date_col not categorical dimension — don't mislabel them
+        if "primary_dimension" not in _item and dimension and item_kind not in ("trend", "outcome_rate_trend"):
+            _item["primary_dimension"] = dimension.get("column", "")
+        if "metric" not in _item and measure:
+            _item["metric"] = measure.get("column", "")
+        if "aggregation" not in _item:
+            _item["aggregation"] = "sum"
+
     items.extend(sql_items[:max_sql_items])
-    warnings = []
     if not sql_items and intent_name in {"ranking", "comparison", "segmentation", "trend"}:
         warnings.append(
             "No aggregate SQL was generated because the question did not safely link to both the required metric and grouping/date fields."
@@ -615,13 +668,56 @@ def build_evidence_plan(
         "version": "evidence-plan-v2",
         "question": question,
         "intent": intent_name,
+        "table_name": table_name,
         "items": items[: max_sql_items + 2],
         "warnings": warnings,
     }
 
 
+def _rebuild_simplified_sql(item: dict[str, Any], table_name: str, error_msg: str) -> str | None:
+    """MAC-SQL Refiner: rebuild a simpler SQL from stored item metadata when the original fails.
+
+    Uses the kind + primary_dimension + metric already stored on the item to construct
+    a less-complex query — no LLM call, no guessing, just simpler params to query_builder.
+    Returns None if we can't safely rebuild (e.g. column-not-found errors where the column
+    name itself is wrong — no point retrying with the same bad name).
+    """
+    kind = item.get("kind", "")
+    error_lower = (error_msg or "").lower()
+    dim = item.get("primary_dimension", "")
+    metric = item.get("metric", "")
+    agg = item.get("aggregation", "sum")
+
+    # Column-not-found: the column name itself is wrong — rebuilding with same name won't help
+    if "does not exist" in error_lower and "column" in error_lower:
+        return None
+
+    # Type / cast error: aggregation incompatible with column type → downgrade to COUNT
+    is_type_error = any(t in error_lower for t in ("type", "cannot cast", "operator does not exist"))
+    fallback_agg = "count" if is_type_error and agg in ("sum", "avg") else agg
+
+    if kind in ("metric_by_dimension", "metric_by_two_dimensions") and dim and agg == "count":
+        return build_count_by_dimension_query(table_name, dim, filters=item.get("filters") or [])
+
+    if kind in ("metric_by_dimension", "metric_by_two_dimensions") and dim and metric:
+        return build_metric_by_dimension_query(table_name, dim, metric, fallback_agg)
+
+    if kind in ("top_n", "outcome_rate_by_dimension") and dim:
+        return build_distribution_query(table_name, dim, limit=10)
+
+    if kind == "distribution" and dim:
+        return build_distribution_query(table_name, dim, limit=10)
+
+    if kind == "numeric_summary" and metric:
+        # Simplest possible: just count non-null rows for this column
+        return f'SELECT COUNT(*) AS row_count, COUNT(DISTINCT "{metric}") AS distinct_count FROM "{table_name}" WHERE "{metric}" IS NOT NULL'
+
+    return None
+
+
 def execute_evidence_plan(evidence_plan: dict[str, Any]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
+    table_name = evidence_plan.get("table_name")
     for item in evidence_plan.get("items", []):
         result = {
             "id": item.get("id"),
@@ -646,5 +742,34 @@ def execute_evidence_plan(evidence_plan: dict[str, Any]) -> list[dict[str, Any]]
             result["data"] = executed.get("data", [])
             result["error"] = executed.get("error")
             result["executed_sql"] = executed.get("query", item["sql"])
+
+            # MAC-SQL Refiner: try kind-aware SQL rebuild before falling back to COUNT(*)
+            if not result["success"] and table_name:
+                rebuilt_sql = _rebuild_simplified_sql(item, table_name, result.get("error", ""))
+                if rebuilt_sql:
+                    rebuilt = execute_aggregate_sql(rebuilt_sql)
+                    if rebuilt.get("success") and rebuilt.get("data"):
+                        result["success"] = True
+                        result["data"] = rebuilt["data"]
+                        result["executed_sql"] = rebuilt_sql
+                        result["_rebuilt"] = True
+                        result["error"] = None
+
+            # COUNT(*) accessibility check — last resort, does NOT count as real evidence
+            if not result["success"] and table_name:
+                fallback_sql = f'SELECT COUNT(*) AS total_rows FROM "{table_name}"'
+                retry = execute_aggregate_sql(fallback_sql)
+                if retry.get("success") and retry.get("data"):
+                    result["success"] = True
+                    result["data"] = retry.get("data", [])
+                    result["kind"] = "count_fallback"
+                    result["executed_sql"] = fallback_sql
+                    result["_retried"] = True
+                    result["error"] = None
+                    result["title"] = (result.get("title") or "") + " [fallback: row count only]"
+                else:
+                    result["error"] = (
+                        f"Original: {result['error']} | Retry COUNT(*): {retry.get('error')}"
+                    )
         results.append(result)
     return results

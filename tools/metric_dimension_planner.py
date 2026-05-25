@@ -14,6 +14,10 @@ AGG_COUNT_TERMS = {
     "count",
     "number of",
     "frequency",
+    "record",
+    "records",
+    "row",
+    "rows",
     "so luong",
     "bao nhieu",
 }
@@ -22,6 +26,8 @@ EXPLICIT_AGG_TERMS = {
     "bottom",
     "highest",
     "lowest",
+    "most",
+    "least",
     "rank",
     "compare",
     "breakdown",
@@ -35,7 +41,6 @@ EXPLICIT_AGG_TERMS = {
     "chia theo",
     "theo",
 }
-BUSINESS_METRIC_CONCEPTS = {"revenue", "profit"}
 _STOPWORDS = {
     "the", "and", "for", "with", "this", "that", "what", "which", "where", "when",
     "how", "why", "are", "is", "of", "to", "in", "by", "a", "an", "create",
@@ -187,7 +192,7 @@ def _select_filters(
         column = str(item.get("column") or "")
         if not column or column in used_columns:
             continue
-        if item.get("role") not in {"dimension", "binary_flag", "text"}:
+        if item.get("role") not in {"dimension", "binary_flag", "outcome", "text"}:
             continue
         match = _matched_sample_value_filter(item, question)
         if match:
@@ -242,11 +247,27 @@ def _is_metric_item(item: dict[str, Any], table_profile: dict[str, Any]) -> bool
     if item.get("role") == "measure":
         return True
     profile = _column_profile(table_profile, str(item.get("column") or ""))
-    concepts = _concept_names(item)
-    has_metric_concept = bool(concepts & BUSINESS_METRIC_CONCEPTS)
-    if not has_metric_concept:
-        return False
     return _is_numeric_profile(profile) and not _identifier_name(str(item.get("column") or ""))
+
+
+def _is_count_groupable_item(item: dict[str, Any], table_profile: dict[str, Any], question: str) -> bool:
+    if not _is_query_matched(item):
+        return False
+    direct_level = _direct_dimension_level(item, question)
+    role = item.get("role")
+    if role in {"dimension", "binary_flag", "datetime"}:
+        return True
+    if role == "identifier" and direct_level > 0:
+        return True
+    profile = _column_profile(table_profile, str(item.get("column") or ""))
+    distinct = int(item.get("sample_distinct_count", 0) or 0)
+    return (
+        role == "measure"
+        and direct_level > 0
+        and _is_numeric_profile(profile)
+        and not _identifier_name(str(item.get("column") or ""))
+        and 1 < distinct <= 120
+    )
 
 
 def _aggregation(question: str, measures: list[dict[str, Any]]) -> str:
@@ -259,14 +280,9 @@ def _aggregation(question: str, measures: list[dict[str, Any]]) -> str:
 
 
 def _dimension_priority(item: dict[str, Any]) -> tuple[int, float]:
-    concepts = _concept_names(item)
     distinct = int(item.get("sample_distinct_count", 0) or 0)
     cardinality_penalty = distinct if distinct > 1 else 9999
-    if "geography" in concepts:
-        return (0, cardinality_penalty, -float(item.get("score", 0) or 0))
-    if "product_category" in concepts:
-        return (1, cardinality_penalty, -float(item.get("score", 0) or 0))
-    return (2, cardinality_penalty, -float(item.get("score", 0) or 0))
+    return (cardinality_penalty, -float(item.get("score", 0) or 0))
 
 
 def _direct_dimension_priority(item: dict[str, Any], question: str) -> tuple[int, float, float]:
@@ -292,16 +308,6 @@ def _select_dimensions(dimensions: list[dict[str, Any]], question: str, limit: i
             return selected
 
     dimensions.sort(key=_dimension_priority)
-    used_concepts = set().union(*(_concept_names(item) for item in selected)) if selected else set()
-    for concept in ("geography", "product_category"):
-        if concept in used_concepts:
-            continue
-        match = next((item for item in dimensions if concept in _concept_names(item) and item not in selected), None)
-        if match:
-            selected.append(match)
-            used_concepts.update(_concept_names(match))
-        if len(selected) >= budget:
-            return selected
     for item in dimensions:
         if item not in selected:
             selected.append(item)
@@ -324,16 +330,18 @@ def build_explicit_aggregate_plan(
         return {"is_explicit": False, "reason": "Intent requires business validation."}
 
     measures = [item for item in linked_columns if _is_metric_item(item, table_profile)]
+    aggregation = _aggregation(question, measures)
     dimensions = []
     for item in linked_columns:
         direct_level = _direct_dimension_level(item, question)
         role = item.get("role")
         is_groupable_role = role in {"dimension", "binary_flag", "datetime"}
         is_direct_identifier = role == "identifier" and direct_level > 0
+        is_count_groupable = aggregation == "count" and _is_count_groupable_item(item, table_profile, question)
         has_variation_hint = int(item.get("sample_distinct_count", 0) or 0) > 1 or direct_level > 0
-        if (is_groupable_role or is_direct_identifier) and _is_query_matched(item) and has_variation_hint:
+        if (is_groupable_role or is_direct_identifier or is_count_groupable) and _is_query_matched(item) and has_variation_hint:
             dimensions.append(item)
-    if not measures or not dimensions:
+    if not dimensions or (aggregation != "count" and not measures):
         return {
             "is_explicit": False,
             "reason": "The question did not link to both a concrete metric and a concrete dimension.",
@@ -341,14 +349,22 @@ def build_explicit_aggregate_plan(
 
     if not (_contains_any(question, EXPLICIT_AGG_TERMS) or intent_name in {"ranking", "comparison", "segmentation", "trend"}):
         return {"is_explicit": False, "reason": "Question does not request aggregation, ranking, comparison, or grouping."}
+    if aggregation == "count" and not _contains_any(question, EXPLICIT_AGG_TERMS):
+        return {"is_explicit": False, "reason": "Count distribution is handled by distribution evidence."}
 
     measures.sort(key=lambda item: (_match_score(item), float(item.get("score", 0) or 0)), reverse=True)
-    selected_measures = measures[:2]
-    selected_dimensions = _select_dimensions(dimensions, question)
+    selected_measures = [] if aggregation == "count" else measures[:2]
+    filter_candidate_columns = {
+        str(item.get("column") or "")
+        for item in dimensions
+        if _matched_sample_value_filter(item, question)
+    }
+    dimension_pool = [
+        item for item in dimensions
+        if str(item.get("column") or "") not in filter_candidate_columns
+    ] or dimensions
+    selected_dimensions = _select_dimensions(dimension_pool, question)
     selected_filters = _select_filters(linked_columns, selected_measures, selected_dimensions, question)
-    aggregation = _aggregation(question, selected_measures)
-    if aggregation == "count":
-        return {"is_explicit": False, "reason": "Count intent is handled by distribution evidence."}
 
     confidence = min(
         0.95,

@@ -1,6 +1,6 @@
-# AI Data Analyst — Multi-Agent Analysis System
+# Agent Analytic — Generic Multi-Agent Analysis System
 
-A multi-agent AI system that converts natural language questions into SQL queries, analyzes results, and generates HTML reports — powered by DeepSeek V4 and LangGraph.
+A multi-agent AI system that converts natural language questions into SQL queries, analyzes results, and generates HTML reports — for **any** uploaded dataset, powered by DeepSeek V4 and LangGraph.
 
 ---
 
@@ -147,7 +147,7 @@ Open `http://localhost:8000`
 ### Web UI
 
 1. Select or upload a dataset (CSV/Excel, max 50 MB)
-2. Type a question (e.g. *"What is the fraud rate by payment method?"*)
+2. Type a question in natural language (e.g. *"What are the top categories by revenue this month?"* or *"Is there a correlation between region and order value?"*)
 3. Click **Analyze** or press `Ctrl+Enter`
 4. Watch the agent pipeline execute in real time
 5. View the generated HTML report in the right panel
@@ -177,9 +177,9 @@ POST /api/reanalyze           # Re-run analytics on provided rows
 
 | Agent | Input | Output |
 |-------|-------|--------|
-| Semantic Agent | question + table profile + optional sample rows | table profile, data context, intent, semantic gaps (requests clarification if context is missing) |
-| Data Agent | question + DB schema | SQL query + raw data rows (1 auto-retry on SQL error) |
-| Analytics Agent | raw data + question | Chi-square, ANOVA, correlations, KPIs, insights (JSON) |
-| Critic Agent | analytics output + question | approve or needs_more_data with feedback (max 2 loops) |
-| Writer Agent | analytics + raw data | HTML report saved to `reports/` |
+| Semantic Agent | question + table (any schema) | table profile, intent, semantic proposal, answerability gate, linked columns, aggregate plan — short-circuits to Writer if clarification needed |
+| Data Agent | selected table | preview rows via `SELECT *` (bounded by `QUERY_SAMPLE_LIMIT`) |
+| Analytics Agent | preview rows + question + semantic context | evidence plan → deterministic SQL queries → report_spec → LLM → KPIs + insights (JSON) |
+| Critic Agent | analytics output + question | approve or needs_more_data with feedback (max 2 loops back to Data Agent) |
+| Writer Agent | report_spec + analytics | HTML report saved to `reports/` |
 

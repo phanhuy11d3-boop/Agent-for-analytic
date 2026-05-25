@@ -43,16 +43,37 @@ def build_distribution_query(
     dimension: str,
     limit: int = 10,
     order_by: str = "value_desc",
+    filters: list[dict[str, Any]] | None = None,
 ) -> str:
     table = quote_identifier(table_name)
     dim = quote_identifier(dimension)
     order_clause = "label ASC" if order_by == "label_asc" else "value DESC"
+    where_sql = _where_clause([f"{dim} IS NOT NULL", *_filter_conditions(filters)])
     return (
         f"SELECT {dim} AS label, COUNT(*) AS value\n"
         f"FROM {table}\n"
-        f"WHERE {dim} IS NOT NULL\n"
+        f"{where_sql}\n"
         f"GROUP BY {dim}\n"
         f"ORDER BY {order_clause}\n"
+        f"LIMIT {int(limit)}"
+    )
+
+
+def build_count_by_dimension_query(
+    table_name: str,
+    dimension: str,
+    limit: int = 10,
+    filters: list[dict[str, Any]] | None = None,
+) -> str:
+    table = quote_identifier(table_name)
+    dim = quote_identifier(dimension)
+    where_sql = _where_clause([f"{dim} IS NOT NULL", *_filter_conditions(filters)])
+    return (
+        f"SELECT {dim} AS label, COUNT(*) AS row_count, COUNT(*) AS value\n"
+        f"FROM {table}\n"
+        f"{where_sql}\n"
+        f"GROUP BY {dim}\n"
+        f"ORDER BY value DESC\n"
         f"LIMIT {int(limit)}"
     )
 

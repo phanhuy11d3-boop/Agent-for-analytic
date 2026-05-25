@@ -235,7 +235,26 @@ def _metric_by_dimension_observations(item: dict[str, Any]) -> list[dict[str, An
             "medium",
             {"values": [{"label": row.get("label"), "value": row["_value"]} for row in negatives[:4]]},
         ))
-    return observations[:5]
+    if len(rows) >= 4:
+        bottom = rows[-1]
+        observations.append(_numbered_observation(
+            item,
+            "bottom_group",
+            f"{bottom.get('label')} ranks last for {metric} by {dimension} with {_fmt_value(bottom['_value'])}.",
+            "medium",
+            {"label": bottom.get("label"), "value": bottom["_value"]},
+        ))
+    if len(rows) >= 3 and total > 0:
+        avg = total / len(rows)
+        above = sum(1 for r in rows if r["_value"] > avg)
+        observations.append(_numbered_observation(
+            item,
+            "above_average",
+            f"{above} of {len(rows)} {dimension} groups are above the average {metric} of {_fmt_value(avg)}.",
+            "medium",
+            {"above": above, "total": len(rows), "avg": round(avg, 2)},
+        ))
+    return observations[:7]
 
 
 def _metric_by_two_dimensions_observations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -334,7 +353,7 @@ def _metric_by_two_dimensions_observations(items: list[dict[str, Any]]) -> list[
 def build_observations(
     evidence_results: list[dict[str, Any]],
     table_profile: dict[str, Any] | None = None,
-    max_observations: int = 6,
+    max_observations: int = 8,
 ) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     observations.extend(_metric_by_two_dimensions_observations(evidence_results))

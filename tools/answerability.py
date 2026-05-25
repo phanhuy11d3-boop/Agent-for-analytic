@@ -46,19 +46,12 @@ AGGREGATE_OR_RANK_TERMS = {
     "avg",
     "sum",
     "total",
-    "revenue",
-    "sales",
-    "profit",
-    "spend",
-    "spending",
     "amount",
     "cao nhat",
     "thap nhat",
     "xep hang",
     "so sanh",
     "chia theo",
-    "doanh thu",
-    "loi nhuan",
 }
 
 
@@ -266,8 +259,8 @@ def evaluate_answerability(
                 "Rephrase with the exact metric and grouping column, or confirm the semantic context first.",
             ],
             "suggested_answer": (
-                "I cannot safely produce a ranked aggregate from this wording. Please specify the metric and group, "
-                "for example: revenue by state, profit by category, or average amount by segment."
+                "I cannot safely produce a ranked aggregate from this wording. "
+                "Please specify the exact metric column and grouping field from your table."
             ),
         }
 

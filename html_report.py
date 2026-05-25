@@ -127,9 +127,19 @@ def _semantic_proposal_html(proposal: dict[str, Any]) -> str:
     return "".join(rows) or "<div class=\"hint\">No safe proposal was produced from this table profile.</div>"
 
 
+def _fmt_metric_num(num: float) -> str:
+    if abs(num) >= 1_000_000:
+        return f"{num / 1_000_000:.2f}M"
+    if abs(num) >= 1_000:
+        return f"{num / 1_000:.1f}K"
+    if num == int(num):
+        return f"{int(num):,}"
+    return f"{num:.4f}"
+
+
 def _metric_cards_from_evidence(evidence_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract key-value metrics from numeric_summary evidence."""
     cards = []
+    # Pass 1: scalar values from numeric_summary
     for item in evidence_results:
         if item.get("kind") != "numeric_summary" or not item.get("success"):
             continue
@@ -142,17 +152,40 @@ def _metric_cards_from_evidence(evidence_results: list[dict[str, Any]]) -> list[
                 except (TypeError, ValueError):
                     continue
                 label = key.replace("_", " ").replace(" value", "").title()
-                if abs(num) >= 1_000_000:
-                    formatted = f"{num / 1_000_000:.2f}M"
-                elif abs(num) >= 1_000:
-                    formatted = f"{num / 1_000:.1f}K"
-                elif num == int(num):
-                    formatted = f"{int(num):,}"
-                else:
-                    formatted = f"{num:.4f}"
-                cards.append({"label": label, "value": formatted})
+                cards.append({"label": label, "value": _fmt_metric_num(num)})
                 if len(cards) >= 4:
                     return cards
+    if cards:
+        return cards
+
+    # Pass 2: extract top/total from grouped evidence when no scalar evidence exists
+    for item in evidence_results:
+        kind = item.get("kind", "")
+        if kind not in {"metric_by_dimension", "metric_by_two_dimensions", "top_n"}:
+            continue
+        if not item.get("success") or not item.get("data"):
+            continue
+        rows = []
+        for row in item.get("data", []):
+            try:
+                rows.append({**row, "_v": float(row.get("value") or 0)})
+            except (TypeError, ValueError):
+                continue
+        if not rows:
+            continue
+        rows.sort(key=lambda r: r["_v"], reverse=True)
+        top = rows[0]
+        total = sum(r["_v"] for r in rows)
+        metric = (item.get("metric") or "value").replace("_", " ").title()
+        dim = (item.get("primary_dimension") or "group").replace("_", " ").title()
+        cards.append({"label": f"Top {dim}", "value": _fmt_metric_num(top["_v"]), "note": str(top.get("label", ""))})
+        cards.append({"label": f"Total {metric}", "value": _fmt_metric_num(total)})
+        cards.append({"label": f"{dim} Count", "value": str(len(rows))})
+        if len(rows) >= 2:
+            bottom = rows[-1]
+            cards.append({"label": f"Bottom {dim}", "value": _fmt_metric_num(bottom["_v"]), "note": str(bottom.get("label", ""))})
+        return cards[:4]
+
     return cards
 
 
@@ -201,6 +234,28 @@ def _claim_contract_html(claim_contract: list[dict[str, Any]]) -> str:
             "</div>"
         )
     return "".join(rows)
+
+
+def _data_quality_banner_html(report_spec: dict[str, Any]) -> str:
+    flag = report_spec.get("data_quality_flag")
+    if not flag:
+        return ""
+    messages = report_spec.get("data_quality_message") or []
+    items_html = "".join(f"<li>{_safe_text(m)}</li>" for m in messages[:3])
+    label = "Insufficient Evidence" if flag == "insufficient" else "Analysis Degraded"
+    hint = (
+        "Không có dữ liệu aggregate nào được thu thập. Report chứa thông tin schema/profile — "
+        "KHÔNG chứa kết quả phân tích từ dữ liệu thực."
+        if flag == "insufficient"
+        else "LLM không phản hồi được — report hiển thị số liệu profile-only, không phải kết quả phân tích."
+    )
+    return (
+        f'<section class="data-quality-banner">'
+        f'<div class="banner-title">⚠ {_safe_text(label)}</div>'
+        f'<ul>{items_html}</ul>'
+        f'<div class="banner-hint">{_safe_text(hint)}</div>'
+        f'</section>'
+    )
 
 
 def _failure_trace_html(failure_trace: list[dict[str, Any]]) -> str:
@@ -334,6 +389,10 @@ html, body { margin:0; min-height:100%; font-family: Inter, Segoe UI, Arial, san
 .mschema-row { border:1px solid #e5e7eb; border-radius:6px; padding:9px 10px; display:grid; gap:4px; }
 .mschema-row .name { font-weight:800; color:#111827; }
 .mschema-row .meta-line { color:var(--muted); font-size:12px; }
+.data-quality-banner { background:#fff1f0; border:2px solid #ffa39e; border-radius:8px; padding:16px 20px; margin-bottom:4px; }
+.data-quality-banner .banner-title { font-size:15px; font-weight:800; color:#cf1322; margin-bottom:8px; }
+.data-quality-banner ul { margin:8px 0 0 18px; color:#820014; font-size:13px; line-height:1.6; }
+.data-quality-banner .banner-hint { margin-top:8px; color:#874d00; font-size:12px; }
 @media (max-width:1100px) {
   .executive-grid, .dashboard, .audit-grid, .context-grid { grid-template-columns:1fr; }
   .slicer-pane { position:static; }
@@ -826,7 +885,9 @@ def generate_report(
 
     evidence_results = report_spec.get("evidence_results", [])
     sections = report_spec.get("sections", [])
-    direct_answer = _section_content(sections, "Direct Answer") or analytics.get("summary", "")
+    # Prefer LLM summary when evidence quality is good; fall back to deterministic Direct Answer
+    llm_summary = (analytics or {}).get("summary", "") if (analytics or {}).get("_evidence_quality") == "ok" else ""
+    direct_answer = llm_summary or _section_content(sections, "Direct Answer") or (analytics or {}).get("summary", "")
     warnings = report_spec.get("warnings", [])
     warning_html = "".join(f"<li>{_safe_text(w)}</li>" for w in warnings[:5])
     executive_points = report_spec.get("executive_points") or analytics.get("insights", [])
@@ -845,10 +906,17 @@ def generate_report(
     )
     results_block = _result_table_html(evidence_results) if output_type == "metric_dimension_report" or has_distribution_result else ""
 
-    # --- BLOCK: Key Metrics from numeric_summary evidence ---
+    # --- BLOCK: Key Metrics (priority: numeric_summary evidence → LLM KPIs → structural fallback) ---
     metric_cards = _metric_cards_from_evidence(evidence_results)
     if not metric_cards:
-        # Fallback to report_spec summary cards
+        llm_kpis = (analytics or {}).get("kpis") or []
+        metric_cards = [
+            {"label": k.get("name", ""), "value": k.get("value", ""), "note": k.get("interpretation", "")}
+            for k in llm_kpis[:4]
+            if k.get("value") and k.get("name")
+        ]
+    if not metric_cards:
+        # Last resort: structural summary cards (row/column counts etc.)
         metric_cards = [
             {"label": c.get("label", ""), "value": c.get("value", "")}
             for c in report_spec.get("summary_cards", [])[:4]
@@ -866,7 +934,7 @@ def generate_report(
     # --- BLOCK: Executive insights (only if we have them) ---
     insights_block = ""
     if executive_points:
-        points_html = "".join(f"<li>{_safe_text(p)}</li>" for p in executive_points[:6])
+        points_html = "".join(f"<li>{_safe_text(p)}</li>" for p in executive_points[:8])
         if candidate_signals:
             signals_html = "".join(
                 "<div class=\"signal\">"
@@ -943,6 +1011,7 @@ def generate_report(
   </header>
 
   <main class="page">
+    {_data_quality_banner_html(report_spec)}
     <section class="answer-card">
       <div class="answer-title">AI Answer</div>
       <div class="answer-text">{_safe_text(direct_answer)}</div>

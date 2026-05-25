@@ -1,14 +1,17 @@
 import json
+import random
+import string
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from html_report import generate_report
 from tools import context_store
 from tools.intent_classifier import classify_intent
 from tools.mschema_builder import build_mschema
 from tools.data_context import build_data_context, build_llm_data_context
-from tools.evidence_planner import build_evidence_plan, execute_evidence_plan
+from tools.evidence_planner import build_evidence_plan, execute_evidence_plan, _rebuild_simplified_sql
 from tools.query_builder import build_distribution_query, build_preview_query
 from tools.report_planner import build_report_spec
 from tools.report_quality import validate_report_spec
@@ -635,6 +638,146 @@ class GenericEngineTests(unittest.TestCase):
         self.assertEqual(spec["slicers"], [])
         self.assertEqual(spec["candidate_signals"], [])
         self.assertIn("cannot safely produce", spec["sections"][0]["content"])
+
+
+    def test_rebuild_simplified_sql_type_error_downgrades_to_count(self):
+        """MAC-SQL: type/cast error → downgrade SUM to COUNT, keep same dimension."""
+        item = {
+            "kind": "metric_by_dimension",
+            "primary_dimension": "group_label",
+            "metric": "text_col",
+            "aggregation": "sum",
+        }
+        sql = _rebuild_simplified_sql(item, "ds_table", "operator does not exist: text + integer")
+        self.assertIsNotNone(sql)
+        self.assertIn('GROUP BY "group_label"', sql)
+        self.assertIn("COUNT", sql.upper())
+
+    def test_rebuild_simplified_sql_column_not_found_returns_none(self):
+        """MAC-SQL: column-not-found error → skip rebuild (can't fix wrong name)."""
+        item = {
+            "kind": "metric_by_dimension",
+            "primary_dimension": "group_label",
+            "metric": "ghost_column",
+            "aggregation": "sum",
+        }
+        result = _rebuild_simplified_sql(item, "ds_table", 'column "ghost_column" does not exist')
+        self.assertIsNone(result)
+
+    def test_rebuild_simplified_sql_distribution_fallback(self):
+        """MAC-SQL: distribution item → simple GROUP BY count fallback."""
+        item = {
+            "kind": "distribution",
+            "primary_dimension": "type_label",
+            "metric": "",
+            "aggregation": "count",
+        }
+        sql = _rebuild_simplified_sql(item, "ds_table", "some transient error")
+        self.assertIsNotNone(sql)
+        self.assertIn('GROUP BY "type_label"', sql)
+
+    def test_trust_sql_blocks_invalid_column_before_sql_build(self):
+        """TRUST-SQL: column that doesn't exist in schema is cleared before SQL generation."""
+        rows = [
+            {"group_label": "A", "numeric_col": 200},
+            {"group_label": "B", "numeric_col": 300},
+        ]
+        profile = profile_from_rows(rows, ["group_label", "numeric_col"])
+        profile["table_name"] = "ds_table"
+        intent = classify_intent("total numeric_col by group_label")
+        linked = [
+            {"column": "ghost_metric", "role": "measure", "name_score": 0.9, "value_score": 0.0, "context_score": 0.0},
+            {"column": "group_label", "role": "dimension", "name_score": 0.9, "value_score": 0.0, "context_score": 0.0},
+        ]
+        with patch("tools.evidence_planner.get_columns_for_table", return_value=["group_label", "numeric_col"]):
+            plan = build_evidence_plan(intent=intent, question="total numeric_col by group_label", table_profile=profile,
+                                       semantic_context={}, linked_columns=linked)
+
+        # ghost_metric should be blocked → warning emitted
+        self.assertTrue(any("ghost_metric" in w for w in plan["warnings"]))
+        # No SQL item should reference ghost_metric
+        for item in plan["items"]:
+            self.assertNotIn("ghost_metric", item.get("sql", ""))
+
+    def test_random_count_ranking_queries_preserve_sql_contract(self):
+        """Random schemas: count-ranking must filter mentioned values and rank by count."""
+        rng = random.SystemRandom()
+        seed = rng.randrange(1, 2**32)
+        local = random.Random(seed)
+
+        def word(prefix: str) -> str:
+            return prefix + "_" + "".join(local.choice(string.ascii_lowercase) for _ in range(6))
+
+        failures = []
+        for _ in range(40):
+            group_col = word(local.choice(["band", "level", "bucket", "group"]))
+            filter_col = word(local.choice(["status", "class", "flag", "result"]))
+            noise_col = word("noise")
+            positive = local.choice(["Approved", "Completed", "Selected", "Matched", "Active"]) + str(local.randrange(10, 99))
+            negative = local.choice(["Rejected", "Pending", "Skipped", "Inactive"]) + str(local.randrange(10, 99))
+            group_values = list(range(1, local.randrange(5, 14))) if local.choice([True, False]) else [
+                word("g") for _ in range(local.randrange(4, 9))
+            ]
+            rows = []
+            for index in range(local.randrange(80, 180)):
+                rows.append({
+                    group_col: local.choice(group_values),
+                    filter_col: positive if local.random() < local.uniform(0.25, 0.75) else negative,
+                    noise_col: local.randrange(1, 1000),
+                })
+            profile = profile_from_rows(rows, [group_col, filter_col, noise_col])
+            profile["table_name"] = word("table")
+            question = local.choice([
+                f"Which {group_col.replace('_', ' ')} has the highest number of rows with {positive}?",
+                f"What {group_col.replace('_', ' ')} has the most records where {filter_col.replace('_', ' ')} is {positive}?",
+                f"Rank {group_col.replace('_', ' ')} by number of records that are {positive}.",
+            ])
+            intent = classify_intent(question)
+            linked = link_schema(question, profile, {}, limit=12)
+            explicit_plan = build_explicit_aggregate_plan(question, intent, profile, linked)
+            evidence_plan = build_evidence_plan(question, intent, profile, {}, linked, explicit_plan)
+            sql_items = [item for item in evidence_plan["items"] if item.get("sql")]
+            sql = sql_items[0]["sql"] if sql_items else ""
+
+            expected_counts = {}
+            for row in rows:
+                if row[filter_col] == positive:
+                    expected_counts[row[group_col]] = expected_counts.get(row[group_col], 0) + 1
+            expected_top = max(expected_counts.items(), key=lambda item: item[1])[0]
+
+            problems = []
+            if not explicit_plan.get("is_explicit"):
+                problems.append(f"not explicit: {explicit_plan.get('reason')}")
+            if explicit_plan.get("aggregation") != "count":
+                problems.append(f"aggregation={explicit_plan.get('aggregation')}")
+            if [item.get("column") for item in explicit_plan.get("dimensions", [])[:1]] != [group_col]:
+                problems.append(f"dimension={explicit_plan.get('dimensions')} expected={group_col}")
+            if not any(item.get("column") == filter_col and item.get("value") == positive for item in explicit_plan.get("filters", [])):
+                problems.append(f"filters={explicit_plan.get('filters')} expected={filter_col}={positive}")
+            if f'GROUP BY "{group_col}"' not in sql:
+                problems.append(f"missing group by in sql={sql}")
+            if f'"{filter_col}" = \'{positive}\'' not in sql:
+                problems.append(f"missing filter in sql={sql}")
+            if "ORDER BY value DESC" not in sql:
+                problems.append(f"missing rank ordering in sql={sql}")
+            if "ORDER BY label ASC" in sql:
+                problems.append(f"label ordering leaked into ranking sql={sql}")
+            if str(expected_top) not in {str(value) for value in group_values}:
+                problems.append("test generator produced impossible expected top")
+            if problems:
+                failures.append({
+                    "seed": seed,
+                    "question": question,
+                    "group_col": group_col,
+                    "filter_col": filter_col,
+                    "positive": positive,
+                    "problems": problems,
+                    "sql": sql,
+                    "linked": linked,
+                })
+                break
+
+        self.assertEqual(failures, [], f"Random count-ranking contract failed: {json.dumps(failures, indent=2)}")
 
 
 if __name__ == "__main__":

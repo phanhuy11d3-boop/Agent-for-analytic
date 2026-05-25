@@ -48,6 +48,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 NINEROUTER_API_KEY = os.getenv("NINEROUTER_API_KEY", "")
 NINEROUTER_BASE_URL = os.getenv("NINEROUTER_BASE_URL", "http://localhost:20128/v1")
 NINEROUTER_MODEL = os.getenv("NINEROUTER_MODEL", "kc/deepseek/deepseek-chat")
+NINEROUTER_TIMEOUT = float(os.getenv("NINEROUTER_TIMEOUT", "20"))
 NINEROUTER_URL = f"{NINEROUTER_BASE_URL}/chat/completions"
 
 QUERY_SAMPLE_LIMIT = int(os.getenv("QUERY_SAMPLE_LIMIT", "1000"))
@@ -145,7 +146,7 @@ def invoke_ninerouter(messages, temperature: float = 0):
     )
     t0 = time.time()
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=NINEROUTER_TIMEOUT) as response:
             raw_body = response.read().decode("utf-8")
         try:
             result = json.loads(raw_body)

@@ -13,6 +13,16 @@ from tools.schema_linker import link_schema
 from tools.table_profiler import profile_from_rows, profile_table
 
 
+_PROFILE_ONLY_KINDS = {"candidate_scores", "missingness", "count_fallback"}
+
+
+def _count_real_evidence(evidence_results: list[dict[str, Any]]) -> int:
+    return sum(
+        1 for r in (evidence_results or [])
+        if r.get("success") and r.get("data") and r.get("kind") not in _PROFILE_ONLY_KINDS
+    )
+
+
 SYSTEM_PROMPT = """You are a senior data analyst for arbitrary uploaded tables.
 You receive a structured report specification produced by deterministic code.
 
@@ -28,7 +38,14 @@ Return only a valid JSON object with this exact shape:
   "hypotheses": []
 }
 
-Rules:
+KPI rules (IMPORTANT — kpis MUST be non-empty when evidence_results is non-empty):
+- Derive 3–4 KPIs directly from the evidence_results in the report_spec.
+- KPI names must be built from the actual column names present in the evidence data — never invent domain terms not visible in the column names.
+- Choose the aggregation appropriate to the evidence kind: totals for additive count/sum metrics, peak/min for ranking, rate or ratio where relevant. Do not sum non-additive values (rates, percentages, scores).
+- Format: M for ≥ 1 million, K for ≥ 1 thousand, comma-separated integer or 2 decimal places otherwise.
+- Never use placeholder names.
+
+Analysis rules:
 - Anchor the summary directly to the question asked and the PRIMARY evidence kind for that intent:
     trend → describe what the trend shows (direction, peak, trough, range)
     ranking / top_n → describe the top and bottom performers and the spread
@@ -99,6 +116,27 @@ def run_analytics(
 
     fallback = analytics_from_report_spec(report_spec)
 
+    # Gate: block LLM call when no real aggregate evidence was collected
+    real_count = _count_real_evidence(evidence_results)
+    if real_count == 0:
+        return {
+            **fallback,
+            "summary": (
+                "Không thu thập được bằng chứng tổng hợp nào cho câu hỏi này. "
+                "Các truy vấn SQL đều không trả về kết quả hoặc thất bại."
+            ),
+            "kpis": [],
+            "insights": [],
+            "anomalies": [
+                "Tất cả evidence queries không có dữ liệu. Kiểm tra: "
+                "(1) cột được liên kết có đúng không, "
+                "(2) bảng có dữ liệu thỏa điều kiện không, "
+                "(3) semantic context đã được cấu hình chưa."
+            ],
+            "recommendation": "Xem lại semantic context của bảng hoặc đặt lại câu hỏi cụ thể hơn.",
+            "_evidence_quality": "insufficient",
+        }
+
     # Extract primary evidence (first chartable item) so LLM anchors summary correctly
     primary_evidence = None
     CHARTABLE = {"trend", "outcome_rate_by_dimension", "top_n", "metric_by_dimension", "distribution"}
@@ -121,8 +159,14 @@ def run_analytics(
 
     try:
         response = invoke_groq(messages, temperature=0.2).content
-        return _normalise_analytics(_parse_json_response(response), fallback)
-    except Exception:
+        result = _normalise_analytics(_parse_json_response(response), fallback)
+        result["_evidence_quality"] = "ok"
+        return result
+    except Exception as exc:
+        fallback["anomalies"] = [
+            f"LLM analysis failed: {str(exc)[:120]}. Showing profile-based fallback only."
+        ]
+        fallback["_evidence_quality"] = "llm_failed"
         return fallback
 
 

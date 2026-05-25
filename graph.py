@@ -20,7 +20,10 @@ def _route_after_semantic(state: AgentState) -> str:
 
 
 def _route_after_critic(state: AgentState) -> str:
-    if state.get("critic_feedback") and state.get("critic_rounds", 0) <= MAX_CRITIC_ROUNDS:
+    # Only retry while there is still a critic round left. The previous
+    # <= check allowed one extra full agent pass, which can burn through the
+    # WebSocket's 180s analysis timeout when the LLM provider is slow.
+    if state.get("critic_feedback") and state.get("critic_rounds", 0) < MAX_CRITIC_ROUNDS:
         return "data_agent"
     return "writer_agent"
 
