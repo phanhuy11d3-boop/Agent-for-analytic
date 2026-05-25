@@ -1,135 +1,189 @@
-# Agent Analytic — Generic Multi-Agent Analysis System
+# Agent Analytic
 
-A multi-agent AI system that converts natural language questions into SQL queries, analyzes results, and generates HTML reports — for **any** uploaded dataset, powered by DeepSeek V4 and LangGraph.
+Generic single-table analytics agent for uploaded or selected PostgreSQL datasets.
 
----
+The system profiles a selected table, links a natural-language question to physical
+columns, builds deterministic SQL evidence, gates unsafe semantic claims, and writes an
+HTML report grounded in the executed evidence.
 
-## Architecture
+It is not a general "LLM writes any SQL" tool. The current design intentionally separates:
 
+- semantic interpretation and answerability checks
+- bounded table preview
+- deterministic SQL evidence planning
+- report quality validation
+- optional LLM summarization over a structured report spec
+
+## Current Scope
+
+- Works on one selected table at a time.
+- Supports existing PostgreSQL tables and uploaded CSV/XLS/XLSX datasets.
+- Uploaded datasets are stored as `ds_...` tables.
+- Uses table profiling, top values, inferred roles, semantic context, and schema linking.
+- Generates evidence-bound HTML reports in `reports/`.
+- Blocks or downgrades reports when evidence is missing, ambiguous, or only profile-level.
+
+## Important Limitations
+
+- "Any dataset" means arbitrary single-table schemas, not guaranteed perfect analysis for every ambiguous question.
+- Multi-table joins are not the core V1 path.
+- Semantic/business questions may require confirmed context such as row grain, outcome column, and positive outcome value.
+- Numeric "range" wording is not always bucketed automatically; low-cardinality numeric columns may be grouped by exact value.
+- Intent classification is heuristic and can still be confused by words that are both business actions and data values.
+- Statistical modeling, causality, and feature importance are not proven by this system. Reports are descriptive unless validated by a confirmed outcome.
+
+## Pipeline
+
+```text
+User question + selected table
+        |
+        v
+Semantic Agent
+  - profile selected table
+  - classify intent
+  - load/propose semantic context
+  - link question terms to columns
+  - build explicit aggregate plan when safe
+  - decide whether clarification/context is required
+        |
+        | clarification required
+        v
+Writer Agent -> context/gap report
+
+        |
+        | answerable enough
+        v
+Data Agent
+  - run bounded preview query: SELECT * FROM selected_table
+  - build compact data context
+        |
+        v
+Analytics Agent
+  - build deterministic evidence plan
+  - execute aggregate SQL evidence
+  - build report_spec
+  - call LLM only to summarize the structured report_spec
+        |
+        v
+Critic Agent
+  - deterministic quality checks
+  - optional LLM review
+  - may loop back to Data Agent up to MAX_CRITIC_ROUNDS
+        |
+        v
+Writer Agent
+  - render HTML report
 ```
-User Question
-      │
-      ▼
-┌──────────────┐    (clarification_required = True)
-│Semantic Agent│──────────────────────────────────────────┐
-└──────┬───────┘                                          │
-       │ (clarification_required = False)                 │
-       ▼                                                  ▼
-┌──────────────┐   SQL + raw data   ┌──────────────┐  ┌──────────────┐
-│  Data Agent  │ ──────────────────▶│AnalyticsAgent│  │ Writer Agent │
-└──────┬───────┘        ▲           └──────┬───────┘  └──────▲───────┘
-       │                │                  │                 │
-       │                │                  ▼                 │
-   (no data)            │           ┌──────────────┐         │
-       │                └───────────│ Critic Agent │─────────┘
-       │             needs_more_data└──────────────┘  approve
-       ▼
-      END
-```
-
-State flows through a LangGraph `StateGraph`. The pipeline starts at `Semantic Agent`. If clarification/metadata is needed, it short-circuits directly to `Writer Agent` to show the Schema Interview / Gaps. Otherwise, it routes to `Data Agent`. The Critic Agent can send feedback to loop `Data Agent` up to 2 times. A conditional edge short-circuits to `END` on SQL error or empty result.
-
----
 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|------------|
-| LLM | DeepSeek V4 Flash via 9router (`oc/deepseek-v4-flash-free`) |
-| Agent Framework | LangGraph `StateGraph` |
-| Database | Supabase PostgreSQL (`psycopg2-binary`) |
-| Web Server | FastAPI + WebSocket |
-| Frontend | Vanilla HTML / CSS / JS |
+| --- | --- |
+| Agent orchestration | LangGraph `StateGraph` |
+| Web server | FastAPI + WebSocket |
+| Database | PostgreSQL/Supabase via `psycopg2-binary` |
+| Upload parsing | pandas + openpyxl |
+| LLM providers | Groq, 9router, or OpenRouter through `config.invoke_groq(...)` |
+| Frontend | Vanilla HTML/CSS/JS |
 
----
+The default provider in code is `groq`. Set `LLM_PROVIDER=ninerouter` or
+`LLM_PROVIDER=openrouter` to use another OpenAI-compatible provider.
 
 ## Project Structure
 
-```
-Agent-Analytic/
-├── agents/
-│   ├── semantic_agent.py    # profile table, classify intent, check semantic gaps, request clarification
-│   ├── data_agent.py        # NL → SQL → execute → raw_data (1 auto-retry)
-│   ├── analytics_agent.py   # raw_data → stats + chi-square + ANOVA → KPIs + insights
-│   ├── critic_agent.py      # QA review → approve or request more data (max 2 rounds)
-│   └── writer_agent.py      # analytics + raw_data → HTML report
- ├── tools/
-│   ├── answerability.py      # evaluate semantic answerability of natural language questions
-│   ├── context_store.py     # load/save semantic contexts in semantic_contexts.json
-│   ├── data_context.py      # build compact data context and prune for LLM token budget
-│   ├── dataset_uploader.py  # upload_dataframe() — creates ds_ tables
-│   ├── evidence_planner.py  # plan evidence requirements based on query and intent
-│   ├── intent_classifier.py # classify user question intent (descriptive, correlation, etc.)
-│   ├── metric_dimension_planner.py # build explicit aggregation plans matching explicit metric and dimensions
-│   ├── mschema_builder.py   # build metadata schema combining profile and semantic context
-│   ├── observation_engine.py # extract and format structured observations/claims from raw evidence
-│   ├── query_builder.py     # help generate or structure SQL queries
-│   ├── report_planner.py    # plan reports and convert report specs to analysis metadata
-│   ├── report_quality.py    # analyze quality issues in generated report or data context
-│   ├── schema_interview.py  # detect semantic gaps and request context/interviews
-│   ├── schema_linker.py     # link semantic concepts to physical columns
-│   ├── schema_provider.py   # get_schema() — dynamic, cached, invalidatable
-│   ├── semantic_inference.py# infer semantics, roles, or relationships from column metadata
-│   ├── semantic_layer.py    # construct a semantic layer definition for the table
-│   ├── semantic_proposer.py # propose semantic context (purpose, grain, outcomes) based on table profiles
-│   ├── sql_executor.py      # execute_sql() — read-only, blocks DDL
-│   ├── table_profiler.py    # profile database tables or raw rows to detect types and top values
-│   └── viz_planner.py       # plan visualizations based on report spec and data
-├── web/
-│   ├── app.py               # FastAPI: GET /, WS /ws/analyze, GET /reports/{file}
-│   ├── routers/
-│   │   └── upload.py        # POST /api/upload, GET /api/tables, DELETE /api/tables/{name}
-│   └── static/              # index.html, style.css, app.js
-├── tests/
-│   ├── test_db.py           # DB connection + sample queries
-│   └── test_analytics.py    # Analytics agent unit tests
-├── reports/                 # Generated HTML reports (gitignored)
-├── config.py                # Load .env, DB/LLM constants, provider routing
-├── state.py                 # AgentState TypedDict
-├── graph.py                 # LangGraph graph: build + stream
-├── html_report.py           # HTML report builder
-└── main.py                  # Entry point: py main.py
-```
+```text
+agents/
+  semantic_agent.py       Semantic gate, table profiling, schema linking, aggregate plan
+  data_agent.py           Bounded preview query for the selected table
+  analytics_agent.py      Evidence plan, SQL evidence execution, report spec, LLM summary
+  critic_agent.py         Report quality review and optional retry loop
+  writer_agent.py         HTML report rendering
 
----
+tools/
+  answerability.py        Determines whether a question can be answered safely
+  context_store.py        Loads/saves confirmed semantic context
+  data_context.py         Builds compact table/data context for LLM use
+  dataset_uploader.py     Creates uploaded `ds_` tables
+  evidence_planner.py     Builds SQL evidence items from intent and linked columns
+  intent_classifier.py    Heuristic intent classification
+  metric_dimension_planner.py
+                          Builds explicit metric/dimension/filter aggregate plans
+  mschema_builder.py      Metadata schema for selected table
+  observation_engine.py   Evidence-bound observations and claims
+  query_builder.py        SQL builders for distributions, counts, metrics, trends
+  report_planner.py       Builds report_spec and dashboard/report metadata
+  report_quality.py       Deterministic report quality checks
+  schema_interview.py     Detects missing semantic context
+  schema_linker.py        Links question terms and sample values to columns
+  schema_provider.py      Dynamic database schema access and cache
+  semantic_inference.py   Role inference from column names/types/cardinality
+  semantic_layer.py       Semantic layer metadata
+  semantic_proposer.py    Proposes table purpose, row grain, outcome, metrics
+  sql_executor.py         Read-only SQL execution with row limits/timeouts
+  table_profiler.py       Profiles DB tables or row samples
+  viz_planner.py          Chart specs from evidence results
+
+web/
+  app.py                  FastAPI app, WebSocket analysis, semantic-context APIs
+  routers/upload.py       Upload/list/delete table APIs
+  static/                 Frontend assets
+
+tests/
+  test_analytics.py       Generic analytics/unit tests
+  test_db.py              Manual DB smoke script
+
+graph.py                  LangGraph wiring
+state.py                  AgentState TypedDict
+config.py                 Env/config and LLM provider routing
+html_report.py            HTML report builder
+main.py                   Uvicorn entry point
+```
 
 ## Setup
 
 ### Prerequisites
 
 - Python 3.11+
-- Supabase PostgreSQL database
-- 9router running locally at `http://localhost:20128` (or another OpenAI-compatible provider)
+- PostgreSQL/Supabase database
+- One configured LLM provider: Groq, 9router, or OpenRouter
 
-### Installation
+### Install
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-### Environment Variables
+### Environment
 
-Create a `.env` file:
+Create `.env`:
 
 ```env
-# Database
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 
-# LLM Provider (ninerouter | openrouter | groq)
-LLM_PROVIDER=ninerouter
+# groq | ninerouter | openrouter
+LLM_PROVIDER=groq
 
-# 9router (active)
+# Groq
+GROQ_API_KEY=gsk_...
+GROQ_API_KEYS=gsk_...;gsk_...
+GROQ_MODEL=llama-3.3-70b-versatile
+
+# 9router
 NINEROUTER_API_KEY=your-key
 NINEROUTER_BASE_URL=http://localhost:20128/v1
-NINEROUTER_MODEL=oc/deepseek-v4-flash-free
+NINEROUTER_MODEL=kc/deepseek/deepseek-chat
 
-# OpenRouter (fallback)
+# OpenRouter
 OPENROUTER_API_KEY=sk-or-v1-...
-OPENROUTER_MODELS=openrouter/free
+OPENROUTER_MODEL=deepseek/deepseek-chat-v3-0324:free
+OPENROUTER_MODELS=deepseek/deepseek-chat-v3-0324:free
 
-# Groq (fallback)
-GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama-3.3-70b-versatile
+# Optional limits
+QUERY_SAMPLE_LIMIT=1000
+PROFILE_SAMPLE_LIMIT=1000
+SEMANTIC_PROFILE_SAMPLE_LIMIT=300
+SEMANTIC_PROPOSAL_USE_LLM=1
+ANALYSIS_TIMEOUT_SECONDS=180
 ```
 
 ### Run
@@ -138,48 +192,98 @@ GROQ_MODEL=llama-3.3-70b-versatile
 py main.py
 ```
 
-Open `http://localhost:8000`
+Open:
 
----
+```text
+http://localhost:8000
+```
 
 ## Usage
 
-### Web UI
+1. Select an existing table or upload CSV/XLS/XLSX.
+2. Ask a natural-language question about the selected table.
+3. The app profiles the table, links columns, executes SQL evidence, and writes an HTML report.
+4. If semantic context is missing, the report asks for the required context instead of inventing an answer.
 
-1. Select or upload a dataset (CSV/Excel, max 50 MB)
-2. Type a question in natural language (e.g. *"What are the top categories by revenue this month?"* or *"Is there a correlation between region and order value?"*)
-3. Click **Analyze** or press `Ctrl+Enter`
-4. Watch the agent pipeline execute in real time
-5. View the generated HTML report in the right panel
+Good examples:
 
-### WebSocket API
-
-```
-WS  ws://localhost:8000/ws/analyze
-    → send: {"question": "...", "selected_table": "table_name"}
-    ← recv: {"type": "start" | "step" | "heartbeat" | "complete" | "error", ...}
-```
-
-### REST API
-
-```
-POST /api/upload              # Upload CSV/Excel
-GET  /api/tables              # List tables with row counts
-DELETE /api/tables/{name}     # Delete uploaded table (ds_ prefix only)
-GET  /api/semantic-context     # Get semantic context, gaps, and LLM proposal for a table
-POST /api/semantic-context     # Save/update semantic context metadata for a table
-POST /api/reanalyze           # Re-run analytics on provided rows
+```text
+Which product category has the highest revenue?
+Which study hours value has the highest number of placed students?
+Compare average score by program where status is Approved.
+Show the frequency distribution of payment installments.
+Which segments have the highest churn rate?
 ```
 
----
+## API
 
-## Agents
+### WebSocket
 
-| Agent | Input | Output |
-|-------|-------|--------|
-| Semantic Agent | question + table (any schema) | table profile, intent, semantic proposal, answerability gate, linked columns, aggregate plan — short-circuits to Writer if clarification needed |
-| Data Agent | selected table | preview rows via `SELECT *` (bounded by `QUERY_SAMPLE_LIMIT`) |
-| Analytics Agent | preview rows + question + semantic context | evidence plan → deterministic SQL queries → report_spec → LLM → KPIs + insights (JSON) |
-| Critic Agent | analytics output + question | approve or needs_more_data with feedback (max 2 loops back to Data Agent) |
-| Writer Agent | report_spec + analytics | HTML report saved to `reports/` |
+```text
+WS /ws/analyze
+send: {"question": "...", "selected_table": "table_name"}
+recv: {"type": "start" | "step" | "heartbeat" | "complete" | "error", ...}
+```
 
+### REST
+
+```text
+GET    /                         Web UI
+GET    /reports/{filename}       Generated report HTML
+POST   /api/upload               Upload CSV/XLS/XLSX, creates ds_ table
+GET    /api/tables               List tables and row counts
+DELETE /api/tables/{name}        Delete uploaded ds_ table only
+GET    /api/semantic-context     Get context, gaps, proposal for a table
+POST   /api/semantic-context     Save/update semantic context
+POST   /api/reanalyze            Re-run report planner on provided rows
+```
+
+Upload constraints:
+
+- CSV, XLSX, XLS
+- max 50 MB
+- max 200 columns
+
+## Evidence And Report Safety
+
+The report is intended to be evidence-bound:
+
+- `Data Agent` returns preview rows only.
+- `Analytics Agent` executes deterministic aggregate SQL from `evidence_planner`.
+- `report_planner` blocks metric dashboards when no usable aggregate evidence exists.
+- `report_quality` flags missing direct answers, empty charts, and missing business evidence.
+- `answerability` prevents business/outcome claims when semantic context is missing.
+
+For count-ranking questions with value filters, the system builds SQL like:
+
+```sql
+SELECT "group_col" AS label, COUNT(*) AS row_count, COUNT(*) AS value
+FROM "table_name"
+WHERE "group_col" IS NOT NULL AND "status_col" = 'PositiveValue'
+GROUP BY "group_col"
+ORDER BY value DESC
+LIMIT 10
+```
+
+## Tests
+
+Run the main unit tests:
+
+```powershell
+py -m unittest tests.test_analytics
+```
+
+Run all discoverable tests:
+
+```powershell
+py -m unittest discover -s tests
+```
+
+Note: `tests/test_db.py` is a DB smoke script and depends on local database contents.
+
+## Development Notes
+
+- Keep table/column logic generic. Do not hardcode domain-specific table names or columns.
+- Prefer deterministic SQL builders for evidence over free-form LLM SQL.
+- Add randomized or schema-varied tests for planner fixes to avoid overfitting to one dataset.
+- When a question is ambiguous, prefer a context-required report over a confident but unsupported answer.
